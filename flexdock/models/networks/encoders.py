@@ -33,6 +33,8 @@ class AtomEncoder(nn.Module):
 
     def forward(self, x):
         x_embedding = 0
+        if x.shape[1] != self.num_categorical_features + self.additional_features_dim:
+            print("X SHAPE ERROR:", x.shape, "categorical:", self.num_categorical_features, "additional:", self.additional_features_dim)
         assert (
             x.shape[1] == self.num_categorical_features + self.additional_features_dim
         )

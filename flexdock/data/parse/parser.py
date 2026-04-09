@@ -55,7 +55,7 @@ class ComplexParser:
 
         return {"ligand": ligs}
 
-    def parse_protein(self, complex_dict):
+    def parse_protein(self, complex_dict, strict=True):
         name = complex_dict["name"]
         apo_rec_path = complex_dict.get("apo_rec_path", None)
         holo_rec_path = complex_dict.get("holo_rec_path", None)
@@ -118,7 +118,12 @@ class ComplexParser:
                 logging.error(
                     f"Failed matching checks for apo and holo structures due to {e}"
                 )
-                return None
+                if strict:
+                    return None
+                else:
+                    logging.warning(
+                        f"Proceeding despite failing checks for {name} (strict=False)."
+                    )
 
         # Check if both structures are None
         if apo_rec_struct is None and holo_rec_struct is None:

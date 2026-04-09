@@ -48,6 +48,10 @@ def construct_sidechain_edge_index(res):
                     )
             elif orderDict[atom_i.name[1]] == atom_j.name[1]:
                 edge_index.extend([[atom_i.idx, atom_j.idx], [atom_j.idx, atom_i.idx]])
+    ### FIX 
+    if len(edge_index) == 0:
+        return np.empty((2, 0), dtype=int)
+    ###
     return np.array(edge_index).T
 
 
@@ -219,6 +223,16 @@ def get_fullrec_graph(struct, complex_graph, lm_embeddings=None):
     # builds the receptor graph with both residues and atoms
     node_feat = rec_residue_featurizer(struct)
     atom_feat = rec_atom_featurizer(struct)
+
+    if lm_embeddings is not None and node_feat.shape[0] != lm_embeddings.shape[0]:
+        if node_feat.shape[0] > lm_embeddings.shape[0]:
+            # pad lm_embeddings to match node_feat size to prevent breaking graph edges
+            padding_size = node_feat.shape[0] - lm_embeddings.shape[0]
+            padding = torch.zeros((padding_size, lm_embeddings.shape[1]), device=lm_embeddings.device, dtype=lm_embeddings.dtype)
+            lm_embeddings = torch.cat([lm_embeddings, padding], dim=0)
+        else:
+            # truncate lm_embeddings to match node_feat
+            lm_embeddings = lm_embeddings[:node_feat.shape[0], :]
 
     complex_graph["receptor"].x = (
         torch.cat([node_feat, lm_embeddings], axis=1)

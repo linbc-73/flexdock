@@ -189,3 +189,7 @@ baselines/**
 *.sh
 misc/**
 *.csv
+
+flexdock_models/
+infer_log/
+data/

@@ -3,14 +3,12 @@ import pandas as pd
 import torch
 import logging
 
-from flexdock.data.parse.base import read_strings_from_txt
 from flexdock.data.parse.protein import parse_pdb_from_path as parse_pdb_pmd
-from flexdock.data.parse.molecule import read_mols
 from flexdock.data.feature.protein import get_nearby_residue_mask
+from rdkit import Chem
 
-
-BASE_DIR = "/data/protein/SKData/DiffDock-Pocket/data/PDBBIND_atomCorrected/"
-
+BASE_DIR = "/data/protein/BC_Data/Docking_Data/apo2mol_dataset/data_folder"
+CSV_PATH = "/data/protein/BC_Data/induce-fit/figrdock_exp/train_data_filter/apo2mol_final_train_set.csv"
 
 def get_pocket_residue_str(
     holo_pos,
@@ -31,22 +29,29 @@ def get_pocket_residue_str(
     pocket_residue_str = ",".join(str(idx.item() + 1) for idx in nearby_residue_idxs)
     return pocket_residue_str
 
-
 def run():
     logging.getLogger().setLevel("INFO")
 
     df_list = []
-    complexes_test = read_strings_from_txt("/data/protein/BC_Data/Docking_Data/pdbbind/timesplit_test")
-
-    for complex_id in complexes_test:
+    
+    # Read CSV
+    df = pd.read_csv(CSV_PATH)
+    test_ids = df[df['split'] == 'test']['id'].tolist()
+    
+    for complex_id in test_ids:
         try:
-            lig_mol = read_mols(BASE_DIR, complex_id, remove_hs=True)[0]
+            lig_name = complex_id.split('__')[-1]
+            ligand_path = os.path.join(BASE_DIR, complex_id, f"{lig_name}.sdf")
+            
+            # Use rdkit to read sdf
+            suppl = Chem.SDMolSupplier(ligand_path, removeHs=True, sanitize=False)
+            lig_mol = next(suppl)
+            if lig_mol is None:
+                continue
             lig_pos = torch.tensor(lig_mol.GetConformer().GetPositions()).float()
-
-            apo_rec_path = f"{BASE_DIR}/{complex_id}/{complex_id}_protein_esmfold_aligned_tr_fix.pdb"
-            holo_rec_path = (
-                f"{BASE_DIR}/{complex_id}/{complex_id}_protein_processed_fix.pdb"
-            )
+            
+            apo_rec_path = os.path.join(BASE_DIR, complex_id, "receptor_apo_prot.pdb")
+            holo_rec_path = os.path.join(BASE_DIR, complex_id, "receptor_holo_prot.pdb")
 
             if not os.path.exists(apo_rec_path) or not os.path.exists(holo_rec_path):
                 continue
@@ -80,13 +85,12 @@ def run():
             df_list.append(complex_dict)
 
         except Exception as e:
-            logging.error(f"Failed to add to inference file due to {e}", exc_info=True)
+            logging.error(f"Failed to add to inference file due to {e}")
             continue
 
-    df = pd.DataFrame.from_dict(df_list)
-    logging.info(f"Number of examples processed={df.shape[0]}")
-    df.to_csv("/data/protein/BC_Data/flexdock/examples/inference_pdbbind.csv", index=None)
-
+    df_out = pd.DataFrame.from_dict(df_list)
+    logging.info(f"Number of examples processed={df_out.shape[0]}")
+    df_out.to_csv("/data/protein/BC_Data/flexdock/examples/inference_apo2mol.csv", index=None)
 
 if __name__ == "__main__":
     run()

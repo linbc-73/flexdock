@@ -30,6 +30,9 @@ def _check_prediction_shapes(inputs, predictions):
     if predictions is None or inputs is None:
         return
 
+    if inputs.get("true_atom_pos") is None:
+        return
+
     if isinstance(predictions["atom_pos"], list):
         assert inputs["true_atom_pos"].shape == predictions["atom_pos"][0].shape
     else:
@@ -74,10 +77,30 @@ class Evaluator:
                         holo_rec_path=df.loc[complex_id].holo_protein_file,
                         data_dir=self.args.data_dir,
                         load_mol=True,
-                        dataset="pdbbind",
+                        dataset=self.args.dataset,
                         pocket_atom_mask=dock_predictions["atom_mask"],
+                        base_path=df.loc[complex_id].base_dir if "base_dir" in df.columns else None,
                     )
+                    
+                    if inputs is None:
+                        logging.warning(f"Failed to prepare inputs for {complex_id}")
+                        continue
+
                     _check_prediction_shapes(inputs, dock_predictions)
+
+                    apo_holo_pocket_rmsd = np.nan
+                    apo_holo_pocket_rmsd_aligned = np.nan
+                    if inputs.get("apo_pos") is not None and inputs.get("true_atom_pos") is not None:
+                        a_pos = inputs["apo_pos"]
+                        h_pos = inputs["true_atom_pos"]
+                        if a_pos.shape == h_pos.shape and len(a_pos) > 0:
+                            apo_holo_pocket_rmsd = float(np.sqrt(np.mean(np.sum((a_pos - h_pos)**2, axis=-1))))
+                            try:
+                                R, tr = rigid_transform_kabsch(a_pos, h_pos, as_numpy=True)
+                                a_pos_aligned = a_pos @ R.swapaxes(-1, -2) + tr[None, :]
+                                apo_holo_pocket_rmsd_aligned = float(np.sqrt(np.mean(np.sum((a_pos_aligned - h_pos)**2, axis=-1))))
+                            except Exception as e:
+                                pass
 
                     dock_metrics = self.compute_docking_metrics(
                         complex_id=complex_id,
@@ -100,6 +123,8 @@ class Evaluator:
                         "confidences": confidences.tolist()
                         if confidences is not None
                         else None,
+                        "apo_holo_pocket_rmsd": apo_holo_pocket_rmsd,
+                        "apo_holo_pocket_rmsd_aligned": apo_holo_pocket_rmsd_aligned,
                         **dock_metrics,
                     }
                     dock_inf_results.append(dock_inf_dict)
@@ -118,9 +143,15 @@ class Evaluator:
                         holo_rec_path=df.loc[complex_id].holo_protein_file,
                         data_dir=self.args.data_dir,
                         load_mol=True,
-                        dataset="pdbbind",
+                        dataset=self.args.dataset,
                         pocket_atom_mask=relax_predictions["atom_mask"],
+                        base_path=df.loc[complex_id].base_dir if "base_dir" in df.columns else None,
                     )
+                    
+                    if inputs is None:
+                        logging.warning(f"Failed to prepare inputs for {complex_id} (relaxation)")
+                        continue
+
                     _check_prediction_shapes(
                         inputs=inputs, predictions=relax_predictions
                     )
@@ -162,6 +193,41 @@ class Evaluator:
                 )
                 continue
 
+        if dock_inf_results:
+            csv_path = output_dir / f"complex_rmsds_{self.args.align_proteins_by}.csv"
+            try:
+                with open(csv_path, "w") as f:
+                    f.write("complex_id,lig_rmsd_top1,lig_rmsd_top5,lig_rmsd_top10,aa_rmsd_top1,aa_rmsd_top5,aa_rmsd_top10,bb_rmsd_top1,bb_rmsd_top5,bb_rmsd_top10,apo_holo_pocket_rmsd,apo_holo_pocket_rmsd_aligned\n")
+                    for res in dock_inf_results:
+                        c_id = res.get("complex_id", "unknown")
+                        rmsds = res.get("rmsds", [])
+                        aa_rmsds = res.get("aa_rmsds", [])
+                        bb_rmsds = res.get("bb_rmsds", [])
+                        
+                        apo_holo_pocket_rmsd = res.get("apo_holo_pocket_rmsd", np.nan)
+                        apo_holo_pocket_rmsd_aligned = res.get("apo_holo_pocket_rmsd_aligned", np.nan)
+                        if apo_holo_pocket_rmsd is None: apo_holo_pocket_rmsd = np.nan
+                        if apo_holo_pocket_rmsd_aligned is None: apo_holo_pocket_rmsd_aligned = np.nan
+
+                        if not rmsds: continue
+                        
+                        lig_rmsd_1 = rmsds[0] if len(rmsds) > 0 else np.nan
+                        lig_rmsd_5 = min(rmsds[:5]) if len(rmsds) >= 1 else np.nan
+                        lig_rmsd_10 = min(rmsds[:10]) if len(rmsds) >= 1 else np.nan
+                        
+                        aa_rmsd_1 = aa_rmsds[0] if len(aa_rmsds) > 0 else np.nan
+                        aa_rmsd_5 = min(aa_rmsds[:5]) if len(aa_rmsds) >= 1 else np.nan
+                        aa_rmsd_10 = min(aa_rmsds[:10]) if len(aa_rmsds) >= 1 else np.nan
+
+                        bb_rmsd_1 = bb_rmsds[0] if len(bb_rmsds) > 0 else np.nan
+                        bb_rmsd_5 = min(bb_rmsds[:5]) if len(bb_rmsds) >= 1 else np.nan
+                        bb_rmsd_10 = min(bb_rmsds[:10]) if len(bb_rmsds) >= 1 else np.nan
+
+                        f.write(f"{c_id},{lig_rmsd_1:.4f},{lig_rmsd_5:.4f},{lig_rmsd_10:.4f},{aa_rmsd_1:.4f},{aa_rmsd_5:.4f},{aa_rmsd_10:.4f},{bb_rmsd_1:.4f},{bb_rmsd_5:.4f},{bb_rmsd_10:.4f},{apo_holo_pocket_rmsd:.4f},{apo_holo_pocket_rmsd_aligned:.4f}\n")
+                print(f"Saved per-complex RMSD detailed metrics to {csv_path}")
+            except Exception as e:
+                print(f"Could not save CSV due to: {e}")
+
         docking_metrics = self.aggregate_docking_metrics(dock_inf_results)
         relax_metrics = self.aggregate_relaxation_metrics(relax_inf_results)
 
@@ -190,13 +256,16 @@ class Evaluator:
         load_mol: bool,
         dataset: str = "pdbbind",
         pocket_atom_mask=None,
+        base_path=None,
     ):
         if load_mol:
-            print(f"Reading molecule from {data_dir}/{complex_id}")
+            target_dir = f"{base_path}/{complex_id}" if base_path else f"{data_dir}/{complex_id}"
+            print(f"Reading molecule from {target_dir}")
+            
             if dataset == "posebusters":
                 try:
                     mol = molecule.read_molecule(
-                        f"{data_dir}/{complex_id}/{complex_id}_ligand.sdf",
+                        f"{target_dir}/{complex_id}_ligand.sdf",
                         remove_hs=False,
                         sanitize=True,
                     )
@@ -206,8 +275,13 @@ class Evaluator:
                     mol = None
             else:
                 try:
-                    mol = molecule.read_mols_v2(base_dir=f"{data_dir}/{complex_id}")[0]
-                    mol = Chem.RemoveAllHs(mol)
+                    mols = molecule.read_mols_v2(base_dir=target_dir)
+                    if len(mols) > 0:
+                        mol = mols[0]
+                        mol = Chem.RemoveAllHs(mol)
+                    else:
+                        print(f"No molecule found in {target_dir}")
+                        mol = None
                 except Exception as e:
                     print(f"Could not load mol due to {e}")
                     mol = None
@@ -219,8 +293,12 @@ class Evaluator:
                 "name": complex_id,
                 "apo_rec_path": apo_rec_path,
                 "holo_rec_path": holo_rec_path,
-            }
+            },
+            strict=(dataset != "apo2mol"),
         )
+        if parsed_protein_inputs is None:
+            return None
+
         holo_rec_struct = parsed_protein_inputs["holo_rec_struct"]
         apo_rec_struct = parsed_protein_inputs["apo_rec_struct"]
 
@@ -229,7 +307,12 @@ class Evaluator:
             apo_rec_pos = apo_rec_struct.get_coordinates(0)
 
             if pocket_atom_mask is not None:
-                holo_rec_pos = holo_rec_pos[pocket_atom_mask]
+                if len(holo_rec_pos) == len(apo_rec_pos):
+                    holo_rec_pos = holo_rec_pos[pocket_atom_mask]
+                else:
+                    logging.warning(f"Shape mismatch: Apo ({len(apo_rec_pos)}) vs Holo ({len(holo_rec_pos)}). Skipping holo atom filtering.")
+                    holo_rec_pos = None
+
                 apo_rec_pos = apo_rec_pos[pocket_atom_mask]
 
             # predictions["atom_mask"] contains pocket + buffer atoms

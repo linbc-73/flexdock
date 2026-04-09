@@ -29,8 +29,9 @@ def parse_args():
     parser.add_argument("--max_complexes", type=int, default=None)
     parser.add_argument("--shard_size", type=int, default=1000)
     parser.add_argument("--quiet_parse", action="store_true")
-
     parser.add_argument("--use_prody", action="store_true")
+    parser.add_argument("--id_list", type=str, default=None, help="Optional: path to a txt file with pdb ids to process, one per line")
+    parser.add_argument("--output_dir", type=str, default=None, help="Directory to save output csv files. If not set, save to current directory.")
 
     args = parser.parse_args()
     return args
@@ -48,7 +49,12 @@ def main():
 
     sequence_fn = partial(get_sequences_from_pdbfile, parser=prot_parser)
 
-    pdb_ids = os.listdir(args.data_dir)
+
+    if args.id_list is not None:
+        with open(args.id_list) as f:
+            pdb_ids = [line.strip() for line in f if line.strip()]
+    else:
+        pdb_ids = os.listdir(args.data_dir)
     if args.max_complexes is not None:
         pdb_ids = pdb_ids[: args.max_complexes]
 
@@ -68,9 +74,14 @@ def main():
                 pdbid_seqs["name"].append(pdb_id)
                 pdbid_seqs["seqres"].append(sequence)
 
-        print(f"Saving shard {shard_idx} to {args.dataset}_{shard_idx}.csv")
+        if args.output_dir:
+            os.makedirs(args.output_dir, exist_ok=True)
+            out_csv = os.path.join(args.output_dir, f"{args.dataset}_{shard_idx}.csv")
+        else:
+            out_csv = f"{args.dataset}_{shard_idx}.csv"
+        print(f"Saving shard {shard_idx} to {out_csv}")
         df = pd.DataFrame.from_dict(pdbid_seqs)
-        df.to_csv(f"{args.dataset}_{shard_idx}.csv", index=False)
+        df.to_csv(out_csv, index=False)
 
 
 if __name__ == "__main__":

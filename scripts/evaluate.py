@@ -14,7 +14,7 @@ def parse_args():
         "--dataset",
         type=str,
         default="pdbbind",
-        choices=["pdbbind", "posebusters", "moad"],
+        choices=["pdbbind", "posebusters", "moad", "apo2mol"],
     )
     parser.add_argument("--output_dir", type=str, default="inf_results/dummy_test")
 

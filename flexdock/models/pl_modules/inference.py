@@ -95,6 +95,8 @@ class InferenceModule(LightningModule):
             self.relaxation_args = None
 
     def predict_step(self, batch, batch_idx, dataloader_idx: int = 0):
+        if batch is None or "name" not in batch or len(batch["name"]) == 0:
+            return None
         name = batch["name"][0]
         if self.cfg.only_run_relaxation:
             output_dir = Path(self.cfg.output_dir)

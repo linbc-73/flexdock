@@ -32,6 +32,9 @@ def parse_args():
         default="data/protein_ligand_example_csv.csv",
         help="Path to a .csv specifying the input as described in the main README",
     )
+    parser.add_argument(
+        "--ids_path", type=str, default=None, help="Path to a file containing the list of ids for which esm embeddings will be generated"
+    )
     args = parser.parse_args()
 
     return args
@@ -89,7 +92,10 @@ def prepare_files_for_embedding(args):
         ids = []
 
         if args.dataset == "pdbbind":
-            if args.ids is None:
+            if args.ids_path is not None:
+                with open(args.ids_path, "r") as f:
+                    names = [line.strip() for line in f.readlines()]
+            elif args.ids is None:
                 names = [
                     name for name in os.listdir(args.data_dir) if name != ".DS_Store"
                 ]

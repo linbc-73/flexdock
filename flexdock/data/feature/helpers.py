@@ -76,6 +76,21 @@ def get_fragment_index(edge_index, base_idx=None, edge_ptr=0):
     )
 
     G = nx.DiGraph()
+    ### FIX FOR EDGE CASES
+    if len(edge_index) > 0 and not isinstance(edge_index, np.ndarray):
+        edge_index = np.array(edge_index)
+        
+    if len(edge_index) == 0 or (hasattr(edge_index, "shape") and len(edge_index.shape) < 2) or (hasattr(edge_index, "shape") and edge_index.shape[1] == 0):
+        return (
+            np.empty(0, dtype=bool),
+            np.empty(0, dtype=bool),
+            np.empty(0, dtype=bool),
+            np.empty(0, dtype=bool),
+            np.empty((2, 0), dtype=np.int64),
+            np.empty((2, 0), dtype=np.int64),
+        )
+    ### 
+
     for edge_idx, edge in enumerate(edge_index.T):
         G.add_edge(*edge, idx=edge_idx)
     edge_to_edge_idx = nx.get_edge_attributes(G, "idx")

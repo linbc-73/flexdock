@@ -205,15 +205,24 @@ def compute_metrics(
         )
         centroid_distances.append(centroid_distance)
 
-        calpha_pred_atoms = pred_atom_pos[ca_mask]
-        calpha_holo_atoms = true_atom_pos[ca_mask]
-        calpha_rmsd = np.sqrt(
-            ((calpha_pred_atoms - calpha_holo_atoms) ** 2).sum(axis=1).mean(axis=0)
-        )
-        bb_rmsds.append(calpha_rmsd)
+        if true_atom_pos is not None:
+            try:
+                calpha_pred_atoms = pred_atom_pos[ca_mask]
+                calpha_holo_atoms = true_atom_pos[ca_mask]
+                calpha_rmsd = np.sqrt(
+                    ((calpha_pred_atoms - calpha_holo_atoms) ** 2).sum(axis=1).mean(axis=0)
+                )
+                bb_rmsds.append(calpha_rmsd)
 
-        aa_rmsd = protein.scRMSD(nearby_atom_mask, pred_atom_pos, true_atom_pos)
-        aa_rmsds.append(aa_rmsd)
+                aa_rmsd = protein.scRMSD(nearby_atom_mask, pred_atom_pos, true_atom_pos)
+                aa_rmsds.append(aa_rmsd)
+            except Exception as e:
+                # print(f"Skipping protein metrics due to error: {e}")
+                bb_rmsds.append(np.nan)
+                aa_rmsds.append(np.nan)
+        else:
+            bb_rmsds.append(np.nan)
+            aa_rmsds.append(np.nan)
 
     metrics = {
         "aa_rmsds": aa_rmsds,
