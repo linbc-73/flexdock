@@ -90,15 +90,28 @@ class Evaluator:
 
                     apo_holo_pocket_rmsd = np.nan
                     apo_holo_pocket_rmsd_aligned = np.nan
+                    apo_pred_pocket_rmsds = []
+                    pred_pocket_gains = []
                     if inputs.get("apo_pos") is not None and inputs.get("true_atom_pos") is not None:
-                        a_pos = inputs["apo_pos"]
-                        h_pos = inputs["true_atom_pos"]
+                        p_mask = dock_predictions.get("pocket_atom_mask")
+                        a_pos = inputs["apo_pos"][p_mask] if p_mask is not None else inputs["apo_pos"]
+                        h_pos = inputs["true_atom_pos"][p_mask] if p_mask is not None else inputs["true_atom_pos"]
                         if a_pos.shape == h_pos.shape and len(a_pos) > 0:
                             apo_holo_pocket_rmsd = float(np.sqrt(np.mean(np.sum((a_pos - h_pos)**2, axis=-1))))
                             try:
                                 R, tr = rigid_transform_kabsch(a_pos, h_pos, as_numpy=True)
                                 a_pos_aligned = a_pos @ R.swapaxes(-1, -2) + tr[None, :]
                                 apo_holo_pocket_rmsd_aligned = float(np.sqrt(np.mean(np.sum((a_pos_aligned - h_pos)**2, axis=-1))))
+                            except Exception as e:
+                                pass
+                            
+                            try:
+                                pred_pos_list = dock_predictions["atom_pos"] if isinstance(dock_predictions["atom_pos"], list) else [dock_predictions["atom_pos"]]
+                                for pred_pos in pred_pos_list:
+                                    p_pred_pos = pred_pos[p_mask] if p_mask is not None else pred_pos
+                                    if p_pred_pos.shape == h_pos.shape:
+                                        cur_apo_pred = float(np.sqrt(np.mean(np.sum((a_pos - p_pred_pos)**2, axis=-1))))
+                                        apo_pred_pocket_rmsds.append(cur_apo_pred)
                             except Exception as e:
                                 pass
 
@@ -125,6 +138,7 @@ class Evaluator:
                         else None,
                         "apo_holo_pocket_rmsd": apo_holo_pocket_rmsd,
                         "apo_holo_pocket_rmsd_aligned": apo_holo_pocket_rmsd_aligned,
+                        "apo_pred_pocket_rmsds": apo_pred_pocket_rmsds,
                         **dock_metrics,
                     }
                     dock_inf_results.append(dock_inf_dict)
@@ -197,7 +211,7 @@ class Evaluator:
             csv_path = output_dir / f"complex_rmsds_{self.args.align_proteins_by}.csv"
             try:
                 with open(csv_path, "w") as f:
-                    f.write("complex_id,lig_rmsd_top1,lig_rmsd_top5,lig_rmsd_top10,aa_rmsd_top1,aa_rmsd_top5,aa_rmsd_top10,bb_rmsd_top1,bb_rmsd_top5,bb_rmsd_top10,apo_holo_pocket_rmsd,apo_holo_pocket_rmsd_aligned\n")
+                    f.write("complex_id,lig_rmsd_top1,lig_rmsd_top5,lig_rmsd_top10,aa_rmsd_top1,aa_rmsd_top5,aa_rmsd_top10,bb_rmsd_top1,bb_rmsd_top5,bb_rmsd_top10,apo_holo_pocket_rmsd,apo_holo_pocket_rmsd_aligned,apo_pred_pocket_rmsd_top1,apo_pred_pocket_rmsd_top5,apo_pred_pocket_rmsd_top10,pred_pocket_gain_top1,pred_pocket_gain_top5,pred_pocket_gain_top10\n")
                     for res in dock_inf_results:
                         c_id = res.get("complex_id", "unknown")
                         rmsds = res.get("rmsds", [])
@@ -206,10 +220,15 @@ class Evaluator:
                         
                         apo_holo_pocket_rmsd = res.get("apo_holo_pocket_rmsd", np.nan)
                         apo_holo_pocket_rmsd_aligned = res.get("apo_holo_pocket_rmsd_aligned", np.nan)
+                        apo_pred_pocket_rmsds = res.get("apo_pred_pocket_rmsds", [])
+                        
                         if apo_holo_pocket_rmsd is None: apo_holo_pocket_rmsd = np.nan
                         if apo_holo_pocket_rmsd_aligned is None: apo_holo_pocket_rmsd_aligned = np.nan
 
                         if not rmsds: continue
+                        
+                        base_apo_holo = apo_holo_pocket_rmsd_aligned if self.args.align_proteins_by != "noalign" and not np.isnan(apo_holo_pocket_rmsd_aligned) else apo_holo_pocket_rmsd
+                        pred_pocket_gains = [base_apo_holo - aa_rmsd for aa_rmsd in aa_rmsds] if not np.isnan(base_apo_holo) else []
                         
                         lig_rmsd_1 = rmsds[0] if len(rmsds) > 0 else np.nan
                         lig_rmsd_5 = min(rmsds[:5]) if len(rmsds) >= 1 else np.nan
@@ -223,7 +242,15 @@ class Evaluator:
                         bb_rmsd_5 = min(bb_rmsds[:5]) if len(bb_rmsds) >= 1 else np.nan
                         bb_rmsd_10 = min(bb_rmsds[:10]) if len(bb_rmsds) >= 1 else np.nan
 
-                        f.write(f"{c_id},{lig_rmsd_1:.4f},{lig_rmsd_5:.4f},{lig_rmsd_10:.4f},{aa_rmsd_1:.4f},{aa_rmsd_5:.4f},{aa_rmsd_10:.4f},{bb_rmsd_1:.4f},{bb_rmsd_5:.4f},{bb_rmsd_10:.4f},{apo_holo_pocket_rmsd:.4f},{apo_holo_pocket_rmsd_aligned:.4f}\n")
+                        apo_pred_pocket_rmsd_top1 = apo_pred_pocket_rmsds[0] if len(apo_pred_pocket_rmsds) > 0 else np.nan
+                        apo_pred_pocket_rmsd_top5 = min(apo_pred_pocket_rmsds[:5]) if len(apo_pred_pocket_rmsds) >= 1 else np.nan
+                        apo_pred_pocket_rmsd_top10 = min(apo_pred_pocket_rmsds[:10]) if len(apo_pred_pocket_rmsds) >= 1 else np.nan
+
+                        pred_pocket_gain_top1 = pred_pocket_gains[0] if len(pred_pocket_gains) > 0 else np.nan
+                        pred_pocket_gain_top5 = max(pred_pocket_gains[:5]) if len(pred_pocket_gains) >= 1 else np.nan
+                        pred_pocket_gain_top10 = max(pred_pocket_gains[:10]) if len(pred_pocket_gains) >= 1 else np.nan
+
+                        f.write(f"{c_id},{lig_rmsd_1:.4f},{lig_rmsd_5:.4f},{lig_rmsd_10:.4f},{aa_rmsd_1:.4f},{aa_rmsd_5:.4f},{aa_rmsd_10:.4f},{bb_rmsd_1:.4f},{bb_rmsd_5:.4f},{bb_rmsd_10:.4f},{apo_holo_pocket_rmsd:.4f},{apo_holo_pocket_rmsd_aligned:.4f},{apo_pred_pocket_rmsd_top1:.4f},{apo_pred_pocket_rmsd_top5:.4f},{apo_pred_pocket_rmsd_top10:.4f},{pred_pocket_gain_top1:.4f},{pred_pocket_gain_top5:.4f},{pred_pocket_gain_top10:.4f}\n")
                 print(f"Saved per-complex RMSD detailed metrics to {csv_path}")
             except Exception as e:
                 print(f"Could not save CSV due to: {e}")
