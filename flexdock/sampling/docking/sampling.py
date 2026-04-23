@@ -76,6 +76,7 @@ def randomize_position(
     sidechain_tor_bridge: bool = False,
     use_bb_orientation_feats: bool = False,
     prior=None,
+    rigid_docking: bool = False,
 ):
     if not no_torsion:
         # randomize torsion angles
@@ -99,9 +100,10 @@ def randomize_position(
             sidechain_torsion_updates = np.random.uniform(
                 low=-np.pi, high=np.pi, size=len(complex_graph["flexResidues"].edge_idx)
             )
-            complex_graph["atom"].pos = modify_sidechains_old(
-                complex_graph, complex_graph["atom"].pos, sidechain_torsion_updates
-            )
+            if not rigid_docking:
+                complex_graph["atom"].pos = modify_sidechains_old(
+                    complex_graph, complex_graph["atom"].pos, sidechain_torsion_updates
+                )
             # Don't delete the part below.
             # complex_graph["atom"].orig_aligned_apo_pos = modify_sidechains_old(complex_graph, complex_graph["atom"].orig_aligned_apo_pos, sidechain_torsion_updates)
             # complex_graph["atom"].pos = complex_graph["atom"].orig_aligned_apo_pos
@@ -111,9 +113,10 @@ def randomize_position(
             sidechain_torsion_updates = np.concatenate(
                 complex_graph.sc_conformer_match_rotations[0]
             )
-            complex_graph["atom"].pos = modify_sidechains_old(
-                complex_graph, complex_graph["atom"].pos, -sidechain_torsion_updates
-            )
+            if not rigid_docking:
+                complex_graph["atom"].pos = modify_sidechains_old(
+                    complex_graph, complex_graph["atom"].pos, -sidechain_torsion_updates
+                )
 
     if flexible_backbone:
         for complex_graph in data_list:
@@ -125,7 +128,7 @@ def randomize_position(
             ]
 
             # Add Gaussian or Harmonic noise to perturb structures slightly
-            if prior is not None:
+            if prior is not None and not rigid_docking:
                 atom_grid, x, y = to_atom_grid_torch(
                     complex_graph["atom"].pos, complex_graph["receptor"].lens_receptors
                 )
@@ -186,6 +189,7 @@ def randomize_position_inf(
     use_bb_orientation_feats: bool = False,
     prior=None,
     initial_noise_std_proportion: float = 1.0,
+    rigid_docking: bool = False,
 ):
     if not no_torsion:
         # randomize torsion angles
@@ -214,7 +218,7 @@ def randomize_position_inf(
             ]
 
             # Add Gaussian or Harmonic noise to perturb structures slightly
-            if prior is not None:
+            if prior is not None and not rigid_docking:
                 atom_grid, x, y = to_atom_grid_torch(
                     complex_graph["atom"].pos, complex_graph["receptor"].lens_receptors
                 )
@@ -245,9 +249,10 @@ def randomize_position_inf(
                     high=np.pi,
                     size=len(complex_graph["flexResidues"].edge_idx),
                 )
-                complex_graph["atom"].pos = modify_sidechains_old(
-                    complex_graph, complex_graph["atom"].pos, sidechain_torsion_updates
-                )
+                if not rigid_docking:
+                    complex_graph["atom"].pos = modify_sidechains_old(
+                        complex_graph, complex_graph["atom"].pos, sidechain_torsion_updates
+                    )
                 # Don't delete the part below.
                 # complex_graph["atom"].orig_aligned_apo_pos = modify_sidechains_old(complex_graph, complex_graph["atom"].orig_aligned_apo_pos, sidechain_torsion_updates)
                 # complex_graph["atom"].pos = complex_graph["atom"].orig_aligned_apo_pos
@@ -257,9 +262,10 @@ def randomize_position_inf(
                 sidechain_torsion_updates = np.concatenate(
                     complex_graph.sc_conformer_match_rotations[0]
                 )
-                complex_graph["atom"].pos = modify_sidechains_old(
-                    complex_graph, complex_graph["atom"].pos, -sidechain_torsion_updates
-                )
+                if not rigid_docking:
+                    complex_graph["atom"].pos = modify_sidechains_old(
+                        complex_graph, complex_graph["atom"].pos, -sidechain_torsion_updates
+                    )
 
     for complex_graph in data_list:
         # set the center of the molecule to the center of the pocket atoms
@@ -739,6 +745,8 @@ def sampling(
         # Apply noise
         if model_args.flexible_sidechains:
             for i, complex_graph in enumerate(data_list):
+                if getattr(model_args, "rigid_docking", False):
+                    continue
                 idx_start = i * sidechain_torsions_per_molecule
                 idx_end = (i + 1) * sidechain_torsions_per_molecule
 
@@ -782,6 +790,8 @@ def sampling(
                 ).numpy()
 
             for i, complex_graph in enumerate(data_list):
+                if getattr(model_args, "rigid_docking", False):
+                    continue
                 idx_start = i * calpha_atoms_per_molecule
                 idx_end = (i + 1) * calpha_atoms_per_molecule
 

@@ -141,6 +141,7 @@ def parse_args():
 
     parser.add_argument("--flexible_backbone", action="store_true", default=True)
     parser.add_argument("--flexible_sidechains", action="store_true", default=True)
+    parser.add_argument("--rigid_docking", action="store_true", default=False, help="Only update ligand coordinates, skip protein updates")
 
     parser.add_argument("--debug_backbone", action="store_true")
     parser.add_argument("--debug_sidechains", action="store_true")
@@ -327,6 +328,7 @@ def predict():
                 }
             )
         sampler_cfg.inference_steps = args.inference_steps
+        sampler_cfg.rigid_docking = getattr(args, "rigid_docking", False)
     else:
         sampler_cfg = None
 

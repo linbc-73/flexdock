@@ -26,6 +26,7 @@ def randomize_position_inf(
     use_bb_orientation_feats: bool = False,
     prior=None,
     initial_noise_std_proportion: float = 1.0,
+    rigid_docking: bool = False,
 ):
     if not no_torsion:
         # randomize torsion angles
@@ -56,7 +57,7 @@ def randomize_position_inf(
             ]
 
             # Add Gaussian or Harmonic noise to perturb structures slightly
-            if prior is not None:
+            if prior is not None and not rigid_docking:
                 atom_grid, x, y = to_atom_grid_torch(
                     complex_graph["atom"].pos, complex_graph["receptor"].lens_receptors
                 )
@@ -87,9 +88,10 @@ def randomize_position_inf(
                     high=np.pi,
                     size=len(complex_graph["flexResidues"].edge_idx),
                 )
-                complex_graph["atom"].pos = modify_sidechains_old(
-                    complex_graph, complex_graph["atom"].pos, sidechain_torsion_updates
-                )
+                if getattr(complex_graph, "rigid_docking", False) == False and not rigid_docking:
+                    complex_graph["atom"].pos = modify_sidechains_old(
+                        complex_graph, complex_graph["atom"].pos, sidechain_torsion_updates
+                    )
                 # Don't delete the part below.
                 # complex_graph["atom"].orig_aligned_apo_pos = modify_sidechains_old(complex_graph, complex_graph["atom"].orig_aligned_apo_pos, sidechain_torsion_updates)
                 # complex_graph["atom"].pos = complex_graph["atom"].orig_aligned_apo_pos
@@ -99,9 +101,10 @@ def randomize_position_inf(
                 sidechain_torsion_updates = np.concatenate(
                     complex_graph.sc_conformer_match_rotations[0]
                 )
-                complex_graph["atom"].pos = modify_sidechains_old(
-                    complex_graph, complex_graph["atom"].pos, -sidechain_torsion_updates
-                )
+                if getattr(complex_graph, "rigid_docking", False) == False and not rigid_docking:
+                    complex_graph["atom"].pos = modify_sidechains_old(
+                        complex_graph, complex_graph["atom"].pos, -sidechain_torsion_updates
+                    )
 
     for complex_graph in data_list:
         # set the center of the molecule to the center of the pocket atoms
@@ -456,20 +459,21 @@ def sampling(
                         "We only support sidechain_tor_bridge=True for sidechain updates"
                     )
 
-                complex_graph_batch["atom"].pos = modify_conformer_torsion_angles(
-                    pos=complex_graph_batch["atom"].pos,
-                    edge_index=complex_graph_batch[
-                        "atom", "atom_bond", "atom"
-                    ].edge_index,
-                    mask_rotate=complex_graph_batch[
-                        "atom", "atom_bond", "atom"
-                    ].edge_mask,
-                    fragment_index=complex_graph_batch[
-                        "atom_bond", "atom"
-                    ].atom_fragment_index,
-                    torsion_updates=sidechain_tor_perturb,
-                    sidechains=True,
-                )
+                if getattr(model_args, "rigid_docking", False) == False:
+                    complex_graph_batch["atom"].pos = modify_conformer_torsion_angles(
+                        pos=complex_graph_batch["atom"].pos,
+                        edge_index=complex_graph_batch[
+                            "atom", "atom_bond", "atom"
+                        ].edge_index,
+                        mask_rotate=complex_graph_batch[
+                            "atom", "atom_bond", "atom"
+                        ].edge_mask,
+                        fragment_index=complex_graph_batch[
+                            "atom_bond", "atom"
+                        ].atom_fragment_index,
+                        torsion_updates=sidechain_tor_perturb,
+                        sidechains=True,
+                    )
 
             if model_args.flexible_backbone:
                 dt_bb_tr = (
@@ -515,20 +519,21 @@ def sampling(
                         + bb_rot_z * np.sqrt(dt_bb_rot) * bb_rot_sigma
                     )
 
-                new_pos, _ = rotate_backbone_torch(
-                    atoms=complex_graph_batch["atom"].pos,
-                    t_vec=bb_tr_perturb,
-                    rot_mat=axis_angle_to_matrix(bb_rot_perturb),
-                    lens_receptors=complex_graph_batch["receptor"].lens_receptors,
-                    total_rot=None,
-                    detach=False,
-                )
+                if getattr(model_args, "rigid_docking", False) == False:
+                    new_pos, _ = rotate_backbone_torch(
+                        atoms=complex_graph_batch["atom"].pos,
+                        t_vec=bb_tr_perturb,
+                        rot_mat=axis_angle_to_matrix(bb_rot_perturb),
+                        lens_receptors=complex_graph_batch["receptor"].lens_receptors,
+                        total_rot=None,
+                        detach=False,
+                    )
 
-                calpha_mask = complex_graph_batch["atom"].ca_mask
-                complex_graph_batch["atom"].pos = new_pos
-                complex_graph_batch["receptor"].pos = complex_graph_batch["atom"].pos[
-                    calpha_mask
-                ]
+                    calpha_mask = complex_graph_batch["atom"].ca_mask
+                    complex_graph_batch["atom"].pos = new_pos
+                    complex_graph_batch["receptor"].pos = complex_graph_batch["atom"].pos[
+                        calpha_mask
+                    ]
 
                 if use_bb_orientation_feats:
                     # compute orientation features

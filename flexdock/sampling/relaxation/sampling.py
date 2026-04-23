@@ -68,6 +68,7 @@ def sampling_on_batch(
     save_traj=True,
     schedule_type="uniform",
     schedule_param=1.0,
+    rigid_docking=False,
 ):
     batch = center_complex(batch)
     if save_traj:
@@ -93,6 +94,10 @@ def sampling_on_batch(
         else:
             lig_update = lig_pred * dt
             atom_update = atom_pred * dt
+            
+        if rigid_docking:
+            atom_update = torch.zeros_like(atom_update)
+            
         batch["ligand"].pos += lig_update
         batch["atom"].pos += atom_update
         batch["receptor"].pos = batch["atom"].pos[batch["atom"].ca_mask]
@@ -121,6 +126,7 @@ def sampling_on_confs(
     device=None,
     schedule_type="uniform",
     schedule_param=1.0,
+    rigid_docking=False,
 ):
     lig_pred, atom_pred = [], []
     for batch in conf_loader:
@@ -132,6 +138,7 @@ def sampling_on_confs(
             save_traj=save_traj,
             schedule_type=schedule_type,
             schedule_param=schedule_param,
+            rigid_docking=rigid_docking,
         )  # N_Batch_Atoms x 3
         lig_pred.append(to_dense_batch(lig_pred_batch, batch["ligand"].batch)[0])
         atom_pred.append(to_dense_batch(atom_pred_batch, batch["atom"].batch)[0])

@@ -170,6 +170,7 @@ class InferenceModule(LightningModule):
             flexible_backbone=sampler_cfg.flexible_backbone,
             sidechain_tor_bridge=sampler_cfg.sidechain_tor_bridge,
             use_bb_orientation_feats=sampler_cfg.get("use_bb_orientation_feats", False),
+            rigid_docking=getattr(self.cfg, "rigid_docking", False),
             prior=self.bb_prior,
         )
 
@@ -356,6 +357,7 @@ class InferenceModule(LightningModule):
                     save_traj=False,
                     schedule_type=self.cfg.relax_schedule_type,
                     schedule_param=self.cfg.relax_schedule_param,
+                    rigid_docking=getattr(self.cfg, "rigid_docking", False),
                 )
                 lig_pred = to_dense_batch(lig_pred_batch, batch["ligand"].batch)[
                     0
