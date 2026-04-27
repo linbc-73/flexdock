@@ -139,11 +139,11 @@ class DockingDataset(Dataset):
             complexes_available = [
                 complex_name
                 for complex_name in complex_names_all
-                if os.path.exists(f"{self.cache_path}/heterograph-{complex_name}-0.pt")
+                if os.path.exists(f"{self.cache_path}/heterograph-{complex_name}.pt")
             ]
 
             # complexes_available = [
-            #     filename.removeprefix("heterograph-").removesuffix("-0.pt")
+            #     filename.removeprefix("heterograph-").removesuffix(".pt")
             #     for filename in os.listdir(self.cache_path)
             #     if "heterograph" in filename
             # ]
@@ -170,9 +170,9 @@ class DockingDataset(Dataset):
             complex_names_all = complex_names_all[: self.limit_complexes]
 
         self.complex_files = [
-            f"heterograph-{name}-0"
+            f"heterograph-{name}"
             for name in complex_names_all
-            if os.path.exists(f"{self.cache_path}/heterograph-{name}-0.pt")
+            if os.path.exists(f"{self.cache_path}/heterograph-{name}.pt")
         ]
 
     def len(self):

@@ -228,14 +228,14 @@ def parse_args():
 
     # Parsing related checks and modifications
     if not args.flexible_backbone:
-        if args.bb_random_prior:
+        if getattr(args, "bb_random_prior", False):
             print(
                 "Backbone prior should not be true when flexible_backbone=False. Setting it to False"
             )
             args.bb_random_prior = False
             print()
 
-    if args.use_new_pipeline:
+    if getattr(args, "use_new_pipeline", False):
         print("New pipeline being used...")
 
     if args.flexible_sidechains and not args.all_atoms:

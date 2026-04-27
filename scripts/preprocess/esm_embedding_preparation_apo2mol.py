@@ -6,6 +6,7 @@ from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
 
 from flexdock.data.constants import restype_3to1
+import tqdm
 
 biopython_parser = PDBParser()
 
@@ -40,8 +41,10 @@ def get_sequence_from_file(file_path):
     return sequences
 
 def prepare_files_for_embedding():
-    csv_path = "/data/protein/BC_Data/flexdock/examples/inference_apo2mol.csv"
-    out_file = "/data/protein/BC_Data/flexdock/data/fasta/prepared_for_esm_apo2mol.fasta"
+    # csv_path = "/data/protein/BC_Data/flexdock/examples/inference_apo2mol.csv"
+    # out_file = "/data/protein/BC_Data/flexdock/data/fasta/prepared_for_esm_apo2mol.fasta"
+    csv_path = "/data/protein/BC_Data/flexdock/examples/inference_apo2mol_train.csv"
+    out_file = "/data/protein/BC_Data/flexdock/data/data_apo2mol_train/fasta/prepared_for_esm_apo2mol.fasta"
     
     if not os.path.exists(csv_path):
         print(f"File {csv_path} not found.")
@@ -51,7 +54,7 @@ def prepare_files_for_embedding():
     sequences = []
     ids = []
     
-    for _, row in df.iterrows():
+    for _, row in tqdm.tqdm(df.iterrows(), total=len(df), desc="Processing complexes for ESM embedding preparation"):
         name = row['pdbid']
         file_path = row['apo_protein_file']
         

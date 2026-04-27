@@ -38,7 +38,7 @@ class DockingTransform(BaseTransform):
         self.include_miscellaneous_atoms = include_miscellaneous_atoms
 
         if time_config.sc_tor_bridge_alpha is None:
-            assert sigma_config.sc_tor_sigma is None
+            assert sigma_config.sidechain_tor_sigma is None
 
         if time_config.bb_rot_bridge_alpha is None:
             assert sigma_config.bb_rot_sigma is None
@@ -51,7 +51,7 @@ class DockingTransform(BaseTransform):
         self.prot_transform = prot_transform
 
     def sample_t(self, data):
-        t_lig = np.random.beta(self.time_config.alpha, self.time_config.beta)
+        t_lig = np.random.beta(self.time_config.sampling_alpha, self.time_config.sampling_beta)
         t_dict = {}
 
         t_dict["tr"], t_dict["rot"], t_dict["tor"] = t_lig, t_lig, t_lig
@@ -102,6 +102,7 @@ class DockingTransform(BaseTransform):
 def construct_transform(cfg, mode="train"):
     transforms = []
 
+    print("flex bb?", cfg.flexible_backbone)
     pocket_transform = PocketTransform(
         pocket_reduction=cfg.pocket.pocket_reduction,
         pocket_buffer=cfg.pocket.pocket_buffer,
@@ -129,8 +130,8 @@ def construct_transform(cfg, mode="train"):
 
     if mode in ["train", "val"]:
         time_config = TimeConfig(
-            alpha=cfg.time_args.sampling_alpha,
-            beta=cfg.time_args.sampling_beta,
+            sampling_alpha=cfg.time_args.sampling_alpha,
+            sampling_beta=cfg.time_args.sampling_beta,
             bb_tr_bridge_alpha=cfg.time_args.bb_tr_bridge_alpha
             if cfg.flexible_backbone
             else None,

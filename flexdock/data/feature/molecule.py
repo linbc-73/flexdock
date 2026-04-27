@@ -67,32 +67,34 @@ def get_posebusters_edge_index(complex_graph):
         ),
         dtype=torch.bool,
     )
-    bond_index = torch.tensor(
-        mol.GetSubstructMatches(Chem.MolFromSmarts("*~*")), dtype=torch.int64
-    ).T
-    angle_index = torch.tensor(
-        mol.GetSubstructMatches(Chem.MolFromSmarts("*~*~*")), dtype=torch.int64
-    ).T
-    torsion_index = torch.tensor(
-        mol.GetSubstructMatches(Chem.MolFromSmarts("*~*~*~*")), dtype=torch.int64
-    ).T
+    bond_matches = mol.GetSubstructMatches(Chem.MolFromSmarts("*~*"))
+    bond_index = torch.tensor(bond_matches, dtype=torch.int64).T if bond_matches else torch.empty((2, 0), dtype=torch.int64)
+
+    angle_matches = mol.GetSubstructMatches(Chem.MolFromSmarts("*~*~*"))
+    angle_index = torch.tensor(angle_matches, dtype=torch.int64).T if angle_matches else torch.empty((3, 0), dtype=torch.int64)
+
+    torsion_matches = mol.GetSubstructMatches(Chem.MolFromSmarts("*~*~*~*"))
+    torsion_index = torch.tensor(torsion_matches, dtype=torch.int64).T if torsion_matches else torch.empty((4, 0), dtype=torch.int64)
+
     complex_graph["ligand", "lig_angle", "ligand"].angle_index = angle_index
     complex_graph["ligand", "lig_torsion", "ligand"].torsion_index = torsion_index
 
-    complex_graph["ligand", "lig_edge", "ligand"].posebusters_bond_mask[
-        (
-            (bond_index[0] * (2 * mol.GetNumAtoms() - bond_index[0] - 3) // 2)
-            + bond_index[1]
-            - 1
-        )
-    ] = True
-    complex_graph["ligand", "lig_edge", "ligand"].posebusters_angle_mask[
-        (
-            (angle_index[0] * (2 * mol.GetNumAtoms() - angle_index[0] - 3) // 2)
-            + angle_index[2]
-            - 1
-        )
-    ] = True
+    if bond_index.size(1) > 0:
+        complex_graph["ligand", "lig_edge", "ligand"].posebusters_bond_mask[
+            (
+                (bond_index[0] * (2 * mol.GetNumAtoms() - bond_index[0] - 3) // 2)
+                + bond_index[1]
+                - 1
+            )
+        ] = True
+    if angle_index.size(1) > 0:
+        complex_graph["ligand", "lig_edge", "ligand"].posebusters_angle_mask[
+            (
+                (angle_index[0] * (2 * mol.GetNumAtoms() - angle_index[0] - 3) // 2)
+                + angle_index[2]
+                - 1
+            )
+        ] = True
     return complex_graph
 
 

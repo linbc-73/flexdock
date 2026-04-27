@@ -98,21 +98,20 @@ class ComplexParser:
                 assert len(holo_rec_struct.residues) == len(
                     apo_rec_struct.residues
                 ), "APO and HOLO structures do not have the same number of residues"
-                assert all(
-                    holo_res.name == apo_res.name
-                    for holo_res, apo_res in zip(
-                        holo_rec_struct.residues, apo_rec_struct.residues
-                    )
-                ), "APO and HOLO structures do not have the same atoms"
-                assert len(holo_rec_struct.atoms) == len(
-                    apo_rec_struct.atoms
-                ), "APO and HOLO structures do not have the same number of atoms"
-                assert all(
-                    holo_atom.name == apo_atom.name
-                    for holo_atom, apo_atom in zip(
-                        holo_rec_struct.atoms, apo_rec_struct.atoms
-                    )
-                ), "APO and HOLO structures do not have the same atoms"
+                residue_mismatch_warned = False
+                for idx, (holo_res, apo_res) in enumerate(zip(holo_rec_struct.residues, apo_rec_struct.residues)):
+                    if holo_res.name[:3] != apo_res.name[:3]:
+                        raise ValueError(f"Amino acid type mismatch in {name} at residue idx {idx} - HOLO: {holo_res.name}, APO: {apo_res.name}")
+
+                if len(holo_rec_struct.atoms) != len(apo_rec_struct.atoms):
+                    raise ValueError(f"Atom count mismatch in {name} - HOLO: {len(holo_rec_struct.atoms)}, APO: {len(apo_rec_struct.atoms)}")
+
+                atom_mismatch_warned = False
+                for idx, (holo_atom, apo_atom) in enumerate(zip(holo_rec_struct.atoms, apo_rec_struct.atoms)):
+                    if holo_atom.atomic_number != apo_atom.atomic_number:
+                        raise ValueError(f"Atom element mismatch in {name} at atom idx {idx} - "
+                                         f"HOLO: {holo_atom.name} (Z={holo_atom.atomic_number}), "
+                                         f"APO: {apo_atom.name} (Z={apo_atom.atomic_number})")
 
             except Exception as e:
                 logging.error(

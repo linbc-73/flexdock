@@ -50,17 +50,26 @@ class TrainingDataPipeline:
 
         processed_names = []
 
-        list_indices = list(range(len(complex_names_all) // CHUNK_SIZE + 1))
+        filtered_complex_names_all = []
+        for name in complex_names_all:
+            if os.path.exists(f"{self.config.cache_path}/heterograph-{name}.pt"):
+                processed_names.append(name)
+            else:
+                filtered_complex_names_all.append(name)
+        
+        logging.info(f"Skipped {len(processed_names)} already processed complexes.")
+        
+        list_indices = list(range(len(filtered_complex_names_all) // CHUNK_SIZE + 1))
         # random.shuffle(list_indices)
         for i in list_indices:
-            complex_names = complex_names_all[CHUNK_SIZE * i : CHUNK_SIZE * (i + 1)]
+            complex_names = filtered_complex_names_all[CHUNK_SIZE * i : CHUNK_SIZE * (i + 1)]
 
             complex_inputs_shard = [
                 self.parser.parse_complex(self.prepare_input_files(complex_name))
                 for idx, complex_name in enumerate(complex_names)
             ]
 
-            logging(f"Num workers={self.config.num_workers}")
+            logging.info(f"Num workers={self.config.num_workers}")
             with Parallel(n_jobs=self.config.num_workers, verbose=5) as parallel:
                 results = parallel(
                     delayed(self.featurizer.featurize_complex)(complex_inputs)
@@ -86,27 +95,27 @@ class TrainingDataPipeline:
                     pickle.dump((ligand[0]), f)
                 processed_names.append(name)
 
-        with open(f"{self.full_cache_path}/complex_names.pkl", "wb") as f:
+        with open(f"{self.config.cache_path}/complex_names.pkl", "wb") as f:
             pickle.dump(processed_names, f)
 
     def prepare_input_files(self, complex_name):
         if self.config.dataset == "pdbbind":
             complex_dict = {
-                "dataset": self.dataset,
+                "dataset": self.config.dataset,
                 "base_dir": self.base_dir,
                 "name": complex_name,
                 "ligand_description": "filename",
-                "apo_protein_file": f"{self.base_dir}/{complex_name}/{complex_name}_{self.apo_protein_file}.pdb",
-                "holo_protein_file": f"{self.base_dir}/{complex_name}/{complex_name}_{self.holo_protein_file}.pdb",
+                "apo_rec_path": f"{self.base_dir}/{complex_name}/{complex_name}_{self.apo_protein_file}.pdb",
+                "holo_rec_path": f"{self.base_dir}/{complex_name}/{complex_name}_{self.holo_protein_file}.pdb",
             }
 
         elif self.config.dataset == "plinder":
             complex_dict = {
-                "dataset": self.dataset,
+                "dataset": self.config.dataset,
                 "base_dir": self.base_dir,
                 "name": complex_name,
                 "ligand_description": "filename",
-                "apo_protein_file": f"{self.base_dir}/{complex_name}/{self.apo_protein_file}.pdb",
-                "holo_protein_file": f"{self.base_dir}/{complex_name}/{self.holo_protein_file}.pdb",
+                "apo_rec_path": f"{self.base_dir}/{complex_name}/{self.apo_protein_file}.pdb",
+                "holo_rec_path": f"{self.base_dir}/{complex_name}/{self.holo_protein_file}.pdb",
             }
         return complex_dict

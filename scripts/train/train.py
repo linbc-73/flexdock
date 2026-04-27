@@ -111,7 +111,7 @@ def main():
     seed_everything(args.seed)
 
     # TODO: Move to LightningDataModule
-    data_module = setup_training_datamodule(args=args)
+    data_module = setup_training_datamodule(data_cfg=args, transform_cfg=args)
 
     model = setup_model(args, task=args.task)
 

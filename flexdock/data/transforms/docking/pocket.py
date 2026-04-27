@@ -45,6 +45,9 @@ class PocketTransform(BaseTransform):
         data = pocket_selection_fn(data, pocket_info)
         return data
 
+        print("has attr?", hasattr(data["atom"], "orig_aligned_apo_pos"))
+        if hasattr(data["atom"], "orig_aligned_apo_pos"):
+            print("is None?", data["atom"].orig_aligned_apo_pos is None)
     def compute_pocket(self, data):
         apo_rec_pos = data["atom"].orig_apo_pos
         holo_rec_pos = data["atom"].orig_holo_pos
@@ -252,6 +255,7 @@ class UnbalancedTransform(BaseTransform):
                     data["atom"].ca_mask
                 ]
                 holo_pos = data["atom"].orig_holo_pos[data["atom"].ca_mask]
+                print("UnbalancedTransform:", type(data["atom"].orig_aligned_apo_pos))
             else:
                 aligned_apo_pos = data["atom"].orig_aligned_apo_pos[data["atom"].calpha]
                 holo_pos = data["atom"].orig_holo_pos[data["atom"].calpha]

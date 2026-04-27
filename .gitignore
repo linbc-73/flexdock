@@ -193,3 +193,5 @@ misc/**
 flexdock_models/
 infer_log/
 data/
+configs/
+train_log/

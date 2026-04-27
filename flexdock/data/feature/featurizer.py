@@ -320,7 +320,7 @@ class Featurizer:
 
         except Exception as e:
             logging.error(
-                f"{name}: Failed to featurize protein due to {e}", exc_info=True
+                f"{name}: Failed to featurize protein due to {e}"
             )
             return None
 
