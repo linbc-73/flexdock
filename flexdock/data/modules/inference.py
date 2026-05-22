@@ -47,6 +47,7 @@ class PredictionDataset(Dataset):
         )
         if output_features is None:
             complex_graph = ComplexData()
+            complex_graph["name"] = input_dict["name"]
             complex_graph["success"] = False
             return complex_graph
 

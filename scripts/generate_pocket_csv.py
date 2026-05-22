@@ -1,4 +1,5 @@
 import os
+import argparse
 import pandas as pd
 import torch
 import logging
@@ -7,9 +8,6 @@ from flexdock.data.parse.base import read_strings_from_txt
 from flexdock.data.parse.protein import parse_pdb_from_path as parse_pdb_pmd
 from flexdock.data.parse.molecule import read_mols
 from flexdock.data.feature.protein import get_nearby_residue_mask
-
-
-BASE_DIR = "../ligbind/data/PDBBIND_atomCorrected"
 
 
 def get_pocket_residue_str(
@@ -32,20 +30,20 @@ def get_pocket_residue_str(
     return pocket_residue_str
 
 
-def run():
+def run(base_dir, split_file, output_csv):
     logging.getLogger().setLevel("INFO")
 
     df_list = []
-    complexes_test = read_strings_from_txt("data/splits/timesplit_test")
+    complexes_test = read_strings_from_txt(split_file)
 
     for complex_id in complexes_test:
         try:
-            lig_mol = read_mols(BASE_DIR, complex_id, remove_hs=True)[0]
+            lig_mol = read_mols(base_dir, complex_id, remove_hs=True)[0]
             lig_pos = torch.tensor(lig_mol.GetConformer().GetPositions()).float()
 
-            apo_rec_path = f"{BASE_DIR}/{complex_id}/{complex_id}_protein_esmfold_aligned_tr_fix.pdb"
+            apo_rec_path = f"{base_dir}/{complex_id}/{complex_id}_protein_esmfold_aligned_tr_fix.pdb"
             holo_rec_path = (
-                f"{BASE_DIR}/{complex_id}/{complex_id}_protein_processed_fix.pdb"
+                f"{base_dir}/{complex_id}/{complex_id}_protein_processed_fix.pdb"
             )
 
             if not os.path.exists(apo_rec_path) or not os.path.exists(holo_rec_path):
@@ -72,7 +70,7 @@ def run():
                 "pdbid": complex_id,
                 "apo_protein_file": apo_rec_path,
                 "holo_protein_file": holo_rec_path,
-                "base_dir": BASE_DIR,
+                "base_dir": base_dir,
                 "ligand_input": None,
                 "ligand_description": "filename",
                 "pocket_residues": pocket_residue_str,
@@ -85,8 +83,17 @@ def run():
 
     df = pd.DataFrame.from_dict(df_list)
     logging.info(f"Number of examples processed={df.shape[0]}")
-    df.to_csv("inference_pdbbind.csv", index=None)
+    df.to_csv(output_csv, index=None)
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(description="Generate pocket CSV for inference")
+    parser.add_argument("--base_dir", type=str, default="/data/protein/SKData/DiffDock-Pocket/data/PDBBIND_atomCorrected",
+                        help="Base directory containing the PDBBIND data")
+    parser.add_argument("--split_file", type=str, default="/data/protein/BC_Data/Docking_Data/pdbbind/timesplit_test",
+                        help="Path to the split file containing complex IDs")
+    parser.add_argument("--output_csv", type=str, default="/data/protein/BC_Data/flexdock/data/pdbbind_infer/inference_pdbbind.csv",
+                        help="Output CSV file path")
+    args = parser.parse_args()
+
+    run(base_dir=args.base_dir, split_file=args.split_file, output_csv=args.output_csv)

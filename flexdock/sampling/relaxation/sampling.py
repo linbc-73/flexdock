@@ -38,6 +38,7 @@ def center_complex(data):
         data["atom"].pos[data["atom"].nearby_atom_mask],
         data["atom"].batch[data["atom"].nearby_atom_mask],
         dim=0,
+        dim_size=data.num_graphs
     )
     # atom_center = scatter_mean(data['atom'].pos, data['atom'].batch, dim=0)
     data["ligand"].pos -= atom_center[data["ligand"].batch]
