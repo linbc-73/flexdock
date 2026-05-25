@@ -55,6 +55,7 @@ class Featurizer:
 
         # Try to featurize the protein
         complex_graph = self.featurize_protein(complex_graph, complex_inputs)
+        
         if complex_graph is None:
             return None
 
@@ -70,6 +71,7 @@ class Featurizer:
         name = complex_inputs["name"]
         ligands = complex_inputs["ligand"]
 
+        complex_graph = None
         for lig_idx, lig in enumerate(ligands):
             if (
                 self.cfg.max_lig_size is not None

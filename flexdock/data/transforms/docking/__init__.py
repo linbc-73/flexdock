@@ -129,8 +129,8 @@ def construct_transform(cfg, mode="train"):
 
     if mode in ["train", "val"]:
         time_config = TimeConfig(
-            alpha=cfg.time_args.sampling_alpha,
-            beta=cfg.time_args.sampling_beta,
+            sampling_alpha=cfg.time_args.sampling_alpha,
+            sampling_beta=cfg.time_args.sampling_beta,
             bb_tr_bridge_alpha=cfg.time_args.bb_tr_bridge_alpha
             if cfg.flexible_backbone
             else None,

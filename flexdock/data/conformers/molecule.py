@@ -7,19 +7,28 @@ from rdkit.Chem import AllChem, rdMolTransforms, RemoveHs
 from scipy.optimize import differential_evolution
 from spyrmsd import rmsd, molecule
 
-from flexdock.data.conformers.exceptions import time_limit
+from flexdock.data.conformers.exceptions import time_limit, TimeoutException
 
 
 def generate_conformer(mol):
     ps = AllChem.ETKDGv2()
-    id = AllChem.EmbedMolecule(mol, ps)
-    if id == -1:
-        print(
-            "rdkit coords could not be generated without using random coords. using random coords now."
-        )
+    
+    # Try embedding with timeout
+    try:
+        with time_limit(20):
+            id = AllChem.EmbedMolecule(mol, ps)
+            if id == -1:
+                print(
+                    "rdkit coords could not be generated without using random coords. using random coords now."
+                )
+                ps.useRandomCoords = True
+                AllChem.EmbedMolecule(mol, ps)
+                AllChem.MMFFOptimizeMolecule(mol, confId=0, maxIters=500)
+    except TimeoutException:
+        print("RDKit EmbedMolecule/MMFFOptimizeMolecule timed out. Generating fast random coords without optimization.")
         ps.useRandomCoords = True
+        ps.maxIterations = 50
         AllChem.EmbedMolecule(mol, ps)
-        AllChem.MMFFOptimizeMolecule(mol, confId=0)
 
 
 LigRMSD = AllChem.AlignMol

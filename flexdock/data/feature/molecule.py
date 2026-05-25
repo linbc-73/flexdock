@@ -1,10 +1,12 @@
 import copy
+import logging
 
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem, RemoveHs, BondType as BT, rdDistGeom, PeriodicTable
 import torch
 import torch.nn.functional as F
 
+from flexdock.data.conformers.exceptions import time_limit, TimeoutException
 from flexdock.data.constants import allowable_features, bonds
 from flexdock.data.feature.helpers import (
     safe_index,
@@ -162,9 +164,13 @@ def get_lig_graph_with_matching(
                 mol_rdkit = RemoveHs(mol_rdkit, sanitize=True)
             mol = copy.deepcopy(mol_maybe_noh)
             if rotable_bonds:
-                ligand_conformer_matching(
-                    mol_rdkit, mol, rotable_bonds, popsize=popsize, maxiter=maxiter
-                )
+                try:
+                    with time_limit(20):
+                        ligand_conformer_matching(
+                            mol_rdkit, mol, rotable_bonds, popsize=popsize, maxiter=maxiter
+                        )
+                except TimeoutException:
+                    logging.warning("Conformer matching timed out after 20 seconds. Proceeding with unoptimized conformer.")
             mol.AddConformer(mol_rdkit.GetConformer())
             rms_list = []
             AllChem.AlignMolConformers(mol, RMSlist=rms_list)
