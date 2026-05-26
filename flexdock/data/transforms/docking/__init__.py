@@ -51,7 +51,7 @@ class DockingTransform(BaseTransform):
         self.prot_transform = prot_transform
 
     def sample_t(self, data):
-        t_lig = np.random.beta(self.time_config.alpha, self.time_config.beta)
+        t_lig = np.random.beta(self.time_config.sampling_alpha, self.time_config.sampling_beta)
         t_dict = {}
 
         t_dict["tr"], t_dict["rot"], t_dict["tor"] = t_lig, t_lig, t_lig

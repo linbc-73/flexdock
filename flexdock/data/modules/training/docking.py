@@ -185,6 +185,15 @@ class DockingDataset(Dataset):
 
         name = self.complex_files[idx]
         complex_graph = torch.load(f"{self.cache_path}/{name}.pt")
+        
+        ### DEBUG: training reproduce
+        # Remove mol to prevent PyG DataLoader collate KeyError due to heterogeneous graphs
+        if hasattr(complex_graph, 'mol'):
+            delattr(complex_graph, 'mol')
+        if 'mol' in complex_graph:
+            del complex_graph['mol']
+        ###
+            
         return complex_graph
 
 

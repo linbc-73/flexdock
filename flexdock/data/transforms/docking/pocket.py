@@ -118,6 +118,11 @@ class PocketTransform(BaseTransform):
         data["atom"].ca_mask = data["atom"].ca_mask[atom_pocket_mask]
         data["atom"].c_mask = data["atom"].c_mask[atom_pocket_mask]
         data["atom"].n_mask = data["atom"].n_mask[atom_pocket_mask]
+        
+        ### DEBUG: training reproduce
+        if hasattr(data["atom"], "nearby_atoms"):
+            data["atom"].nearby_atoms = data["atom"].nearby_atoms[atom_pocket_mask]
+        ###
 
         # Gather edges between atoms in pocket
         atom_edge_index = data["atom", "atom_bond", "atom"].edge_index

@@ -1,4 +1,5 @@
 import copy
+import os
 from typing import Any
 from functools import partial
 import contextlib
@@ -71,7 +72,11 @@ class FlexDockModule(pl.LightningModule):
             self.metrics_dict[metric] = CustomMeanMetric()
 
     def training_step(self, batch, batch_idx):
+        self._current_batch = batch
         predictions = self.general_step_with_oom(batch, batch_idx)
+        if predictions is None:
+            return None
+            
         loss, loss_breakdown = self.loss(predictions, batch, apply_mean=True)
 
         for key, value in loss_breakdown.items():
@@ -81,7 +86,7 @@ class FlexDockModule(pl.LightningModule):
             self.log(
                 f"train_{key}",
                 value,
-                on_step=False,
+                on_step=True,
                 on_epoch=True,
                 sync_dist=True,
                 batch_size=batch_size,
@@ -421,6 +426,39 @@ class FlexDockModule(pl.LightningModule):
         r"""Overrides the PyTorch Lightning backward step and adds the OOM check."""
         try:
             loss.backward(*args, **kwargs)
+            
+            ### DEBUG: training reproduce
+            nan_detected = False
+            for name, param in self.model.named_parameters():
+                if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
+                    print(f"\n[🚨 警报] 梯度在第 {self.current_epoch} 个 Epoch 崩溃了！(Global step: {self.global_step})")
+                    print(f"触发 NaN 的网络层: {name}")
+                    nan_detected = True
+                    break
+
+            if nan_detected:
+                batch = getattr(self, '_current_batch', None)
+                try:
+                    if batch is not None:
+                        if hasattr(batch, 'name'):
+                            print(f"引发崩溃的数据样本名称: {batch.name}")
+                        
+                        rank = getattr(self, "global_rank", 0)
+                        file_name = (
+                            f"toxic_batch_data_rank{rank}_"
+                            f"epoch{self.current_epoch}_step{self.global_step}_"
+                            f"pid{os.getpid()}.pt"
+                        )
+                        torch.save(batch, file_name)
+                        print(f"💾 已将引发 NaN 的 batch 数据成功保存至本地 {os.path.abspath(file_name)}")
+                    else:
+                        print("未能获取到当前 batch 数据。")
+                except Exception as e:
+                    print(f"尝试保存数据失败: {e}")
+                    
+                raise RuntimeError("检测到 NaN 梯度，由于开启了保存和保护机制，程序抛出异常以便所有分布节点同步停止！")
+            ### 
+
         except RuntimeError as e:
             if "CUDA out of memory" in str(e):
                 logging.error(
