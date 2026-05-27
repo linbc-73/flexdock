@@ -101,6 +101,9 @@ class FlexDockModule(pl.LightningModule):
             with torch.no_grad():
                 predictions = self.general_step_with_oom(batch, batch_idx)
 
+            if predictions is None:
+                return None
+
             _, loss_breakdown = self.loss(predictions, batch, apply_mean=True)
             for key, value in loss_breakdown.items():
                 skip_logging_condn = "tor" in key and torch.isnan(value)
@@ -147,12 +150,21 @@ class FlexDockModule(pl.LightningModule):
             return self.model(batch, fast_updates=True)
 
         except RuntimeError as e:
+            ### DEBUG: training reproduce
+            world_size = getattr(self.trainer, "world_size", 1)
+            ###
             if "out of memory" in str(e):
                 logging.error("| WARNING: ran out of memory, skipping batch")
                 for p in self.model.parameters():
                     if p.grad is not None:
                         del p.grad  # free some memory
                 torch.cuda.empty_cache()
+                ### DEBUG: training reproduce
+                if world_size > 1:
+                    raise RuntimeError(
+                        "Encountered OOM on one rank under DDP. Refusing to skip a single-rank batch because it can deadlock distributed training."
+                    ) from e
+                ###
 
             elif "Input mismatch" in str(e):
                 logging.error("| WARNING: weird torch_cluster error, skipping batch")
@@ -160,6 +172,12 @@ class FlexDockModule(pl.LightningModule):
                     if p.grad is not None:
                         del p.grad  # free some memory
                 torch.cuda.empty_cache()
+                ### DEBUG: training reproduce
+                if world_size > 1:
+                    raise RuntimeError(
+                        "Encountered per-rank torch_cluster input mismatch under DDP. Refusing to skip a single-rank batch because it can deadlock distributed training."
+                    ) from e
+                ###
             else:
                 raise e
 
@@ -365,18 +383,29 @@ class FlexDockModule(pl.LightningModule):
 
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         # Updates EMA parameters after optimizer.step()
-        self.ema.update(self.model.parameters())
+        ### DEBUG: training reproduce
+        # if self.training_cfg.use_ema:
+        if self.training_cfg.use_ema and self.ema is not None:
+            self.ema.store(self.model.parameters())
+        ### 
+            self.ema.update(self.model.parameters())
 
     def on_validation_start(self):
-        self.ema.store(self.model.parameters())
-        if self.training_cfg.use_ema:
+        ### DEBUG: training reproduce
+        # if self.training_cfg.use_ema:
+        if self.training_cfg.use_ema and self.ema is not None:
+            self.ema.store(self.model.parameters())
+        ### 
             rank_zero_info("Copying EMA parameters into model before validation")
             self.ema.copy_to(self.model.parameters())
 
     def on_save_checkpoint(self, checkpoint: torch.Dict[str, Any]) -> None:
-        if self.training_cfg.use_ema:
+        ### DEBUG: training reproduce
+        # if self.training_cfg.use_ema:
+        if self.training_cfg.use_ema and self.ema is not None:
+        ### 
             checkpoint["ema_weights"] = copy.deepcopy(self.ema_state_dict)
-        checkpoint["ema"] = self.ema.state_dict()
+            checkpoint["ema"] = self.ema.state_dict()
 
     def on_load_checkpoint(self, checkpoint: torch.Dict[str, Any]) -> None:
         if self.training_cfg.use_ema and "ema" in checkpoint:
@@ -391,7 +420,10 @@ class FlexDockModule(pl.LightningModule):
             )
 
     def on_train_start(self):
-        if self.ema is None:
+        ### DEBUG: training reproduce
+        # if self.training_cfg.use_ema:
+        if self.training_cfg.use_ema and self.ema is not None:
+        ### 
             rank_zero_info("Initializing EMA")
             self.ema = ExponentialMovingAverage(
                 parameters=self.model.parameters(), decay=self.training_cfg.ema_rate
@@ -417,7 +449,10 @@ class FlexDockModule(pl.LightningModule):
                 self.log(f"valinf_{key}", metric.compute(), sync_dist=True)
                 metric.reset()
 
-        if self.training_cfg.use_ema:
+        ### DEBUG: training reproduce
+        # if self.training_cfg.use_ema:
+        if self.training_cfg.use_ema and self.ema is not None:
+        ### 
             self.ema_state_dict = copy.deepcopy(self.model.state_dict())
             rank_zero_info("Restoring Model parameters...")
             self.ema.restore(self.model.parameters())
@@ -468,6 +503,13 @@ class FlexDockModule(pl.LightningModule):
                     if p.grad is not None:
                         del p.grad  # free some memory
                 torch.cuda.empty_cache()
+                ### DEBUG: training reproduce
+                world_size = getattr(self.trainer, "world_size", 1)
+                if world_size > 1:
+                    raise RuntimeError(
+                        "Encountered backward OOM on one rank under DDP. Refusing to skip a single-rank batch because it can deadlock distributed training."
+                    ) from e
+                ###
             else:
                 raise e
 

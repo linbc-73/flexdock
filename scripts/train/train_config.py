@@ -47,7 +47,10 @@ def setup_strategy(cfg):
     strategy_kwargs = {}
     if strategy_str == "ddp":
         rank_zero_info("DDP: pl_strategy=DDPStrategy(find_unused_parameters=True)")
-        strategy_kwargs["sharding_strategy"] = "NO_SHARD"
+        ### DEBUG: training reproduce
+        # strategy_kwargs["sharding_strategy"] = "NO_SHARD"
+        return DDPStrategy(find_unused_parameters=True)
+        ###
     else:
         rank_zero_info(
             "INFO: Option 0: pl_strategy = FSDPStrategy(sharding_strategy=...)"
