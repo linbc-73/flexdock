@@ -180,7 +180,23 @@ def parse_args():
 def load_args_from_yaml(yaml_file):
     with open(yaml_file) as f:
         configs = yaml.full_load(f)
-    return argparse.Namespace(**configs)
+
+    # Some saved YAMLs are nested (e.g., callbacks:, data:, etc.).
+    # Flatten top-level nested dicts so that fields like `sampling_alpha`
+    # are available as top-level attributes on the returned Namespace.
+    flat = {}
+    if isinstance(configs, dict):
+        for k, v in configs.items():
+            if isinstance(v, dict):
+                # Merge nested dict into flat; nested keys may overwrite earlier ones
+                for kk, vv in v.items():
+                    flat[kk] = vv
+            else:
+                flat[k] = v
+    else:
+        flat = configs
+
+    return argparse.Namespace(**flat)
 
 
 def prepare_ckpt_and_args(args):

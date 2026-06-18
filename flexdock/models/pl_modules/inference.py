@@ -52,7 +52,7 @@ class InferenceModule(LightningModule):
         self.docking_module = load_pretrained_docking_model(
             cfg=configs["docking"],
             ckpt_file=checkpoints["docking"],
-            use_ema_weights=True,
+            use_ema_weights=True, # TODO: Add option for this
             freeze=True,
         )
         self.t_to_sigma = self.docking_module.t_to_sigma

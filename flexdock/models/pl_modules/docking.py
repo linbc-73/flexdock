@@ -421,13 +421,14 @@ class FlexDockModule(pl.LightningModule):
 
     def on_train_start(self):
         ### DEBUG: training reproduce
-        # if self.training_cfg.use_ema:
-        if self.training_cfg.use_ema and self.ema is not None:
-        ### 
-            rank_zero_info("Initializing EMA")
-            self.ema = ExponentialMovingAverage(
-                parameters=self.model.parameters(), decay=self.training_cfg.ema_rate
-            )
+        # Initialize EMA if configured. Previous guard incorrectly
+        # required `self.ema` to be not-None which prevented initialization.
+        if self.training_cfg.use_ema:
+            if self.ema is None:
+                rank_zero_info("Initializing EMA")
+                self.ema = ExponentialMovingAverage(
+                    parameters=self.model.parameters(), decay=self.training_cfg.ema_rate
+                )
         return super().on_train_start()
 
     def on_train_epoch_start(self) -> None:
@@ -654,7 +655,23 @@ def load_pretrained_model(
     #    strat_context = FSDP.summon_full_params(model, offload_to_cpu=True)
     strat_context = contextlib.nullcontext()
     with strat_context:
-        model.load_state_dict(state_dict, strict=True)
+        # Allow loading older checkpoints that may not contain newly added
+        # normalization parameters. Use strict=False so missing keys are
+        # initialized to model defaults, but log them for diagnostics.
+        load_res = model.load_state_dict(state_dict, strict=False)
+        try:
+            missing = load_res.missing_keys
+            unexpected = load_res.unexpected_keys
+        except Exception:
+            # Older torch versions may return a dict
+            missing = load_res.get("missing_keys", [])
+            unexpected = load_res.get("unexpected_keys", [])
+
+        if len(missing) > 0:
+            logging.warning(f"Missing keys in checkpoint (initialized randomly): {missing}")
+        if len(unexpected) > 0:
+            logging.warning(f"Unexpected keys in checkpoint (ignored): {unexpected}")
+
         if freeze:
             model.freeze()
 
