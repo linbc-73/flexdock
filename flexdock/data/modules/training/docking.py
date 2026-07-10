@@ -202,6 +202,7 @@ class DockingDataModule(LightningDataModule):
         self,
         data_cfg: DockingDataConfig,
         transform_cfg: dict[str, Any],
+        task: str = "docking",
     ):
         super().__init__()
         assert (
@@ -210,8 +211,9 @@ class DockingDataModule(LightningDataModule):
 
         self.data_cfg = data_cfg
         self.transform_cfg = transform_cfg
+        self.task = task
 
-        train_transform = construct_transform(cfg=transform_cfg, mode="train")
+        train_transform = construct_transform(cfg=transform_cfg, mode="train", task=task)
         self._train_dataset = DockingDataset(
             transform=train_transform,
             dataset=data_cfg.dataset,
@@ -225,7 +227,7 @@ class DockingDataModule(LightningDataModule):
             require_ligand=data_cfg.require_ligand,
         )
 
-        val_transform = construct_transform(cfg=transform_cfg, mode="val")
+        val_transform = construct_transform(cfg=transform_cfg, mode="val", task=task)
         self._val_dataset = DockingDataset(
             transform=val_transform,
             dataset=data_cfg.dataset,
@@ -240,7 +242,7 @@ class DockingDataModule(LightningDataModule):
         )
 
         if data_cfg.run_val_inference:
-            inf_transform = construct_transform(cfg=transform_cfg, mode="inference")
+            inf_transform = construct_transform(cfg=transform_cfg, mode="inference", task=task)
             inf_complexes = [
                 self._val_dataset.get(idx)
                 for idx in range(

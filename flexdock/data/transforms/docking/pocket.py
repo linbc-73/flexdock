@@ -73,12 +73,12 @@ class PocketTransform(BaseTransform):
         amber_pocket_mask = ":" + ",".join(
             [
                 str(idx + 1)
-                for idx in torch.argwhere(res_pocket_mask).squeeze().numpy().tolist()
+                for idx in torch.argwhere(res_pocket_mask).view(-1).numpy().tolist()
             ]
         )
         data.pocket_mask = amber_pocket_mask
 
-        data["receptor"].nearby_residues = nearby_residues
+        data["receptor"].nearby_residues = nearby_residues[res_pocket_mask]
 
         # Update atom numbering
         atom_numbering_old = torch.arange(data["atom"].pos.size(0))

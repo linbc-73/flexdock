@@ -404,10 +404,10 @@ def get_binding_pocket_masks(
         cutoff=pocket_cutoff,
         min_residues=pocket_min_size,
     )
-    nearby_residue_idxs = torch.argwhere(nearby_residue_mask).squeeze()
-    ca_atom_idxs = torch.argwhere(ca_mask).squeeze()
+    nearby_residue_idxs = torch.argwhere(nearby_residue_mask).view(-1)
+    ca_atom_idxs = torch.argwhere(ca_mask).view(-1)
     ca_pos = torch.index_select(atom_pos, -2, ca_atom_idxs)
     pocket_center = torch.index_select(ca_pos, -2, nearby_residue_idxs).mean(dim=-2)
     pocket_res_mask = torch.linalg.norm(ca_pos - pocket_center, dim=-1) < pocket_buffer
     pocket_atom_mask = torch.index_select(pocket_res_mask, -1, atom_rec_index)
-    return pocket_center, pocket_res_mask, pocket_atom_mask, nearby_residue_idxs
+    return pocket_center, pocket_res_mask, pocket_atom_mask, nearby_residue_mask

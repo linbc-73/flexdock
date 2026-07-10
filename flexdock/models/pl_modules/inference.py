@@ -224,6 +224,11 @@ class InferenceModule(LightningModule):
                     self.cfg.flow_temp_scale_1_rot,
                     self.cfg.flow_temp_scale_1_tor,
                 ),
+                bb_sigma_mode=getattr(self.cfg, "bb_sigma_mode", "fixed"),
+                bb_sigma_ref_rmsd=getattr(self.cfg, "bb_sigma_ref_rmsd", 2.0),
+                bb_sigma_power=getattr(self.cfg, "bb_sigma_power", 1.0),
+                bb_sigma_min_scale=getattr(self.cfg, "bb_sigma_min_scale", 0.5),
+                bb_sigma_max_scale=getattr(self.cfg, "bb_sigma_max_scale", 2.0),
             )
         except Exception as e:
             logging.error(

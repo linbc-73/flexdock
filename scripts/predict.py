@@ -136,6 +136,38 @@ def parse_args():
     parser.add_argument("--flow_temp_scale_0_tor", type=float, default=1.0)
     parser.add_argument("--flow_temp_scale_1_tor", type=float, default=1.0)
 
+    parser.add_argument(
+        "--bb_sigma_mode",
+        type=str,
+        default="fixed",
+        choices=["fixed", "predicted"],
+        help="Backbone sigma strategy: fixed uses config sigma; predicted scales sigma by residue RMSD predictions.",
+    )
+    parser.add_argument(
+        "--bb_sigma_ref_rmsd",
+        type=float,
+        default=2.0,
+        help="Reference residue RMSD used to normalize predicted flexibility.",
+    )
+    parser.add_argument(
+        "--bb_sigma_power",
+        type=float,
+        default=1.0,
+        help="Exponent applied to normalized predicted flexibility before clipping.",
+    )
+    parser.add_argument(
+        "--bb_sigma_min_scale",
+        type=float,
+        default=0.5,
+        help="Minimum scaling factor applied to bb sigma in predicted mode.",
+    )
+    parser.add_argument(
+        "--bb_sigma_max_scale",
+        type=float,
+        default=2.0,
+        help="Maximum scaling factor applied to bb sigma in predicted mode.",
+    )
+
     parser.add_argument("--initial_noise_std_proportion", type=float, default=1.0)
     parser.add_argument("--use_fast_sampling", action="store_true")
 

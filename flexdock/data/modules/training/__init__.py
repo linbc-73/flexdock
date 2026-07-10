@@ -2,11 +2,13 @@ from flexdock.data.modules.training import docking
 
 
 def setup_training_datamodule(data_cfg, transform_cfg, device: str = "cpu"):
-    if data_cfg.task == "docking":
+    if data_cfg.task in ["docking", "residue_rmsd"]:
         docking_data_cfg = docking.DockingDataConfig.from_dict(data_cfg)
 
         return docking.DockingDataModule(
-            data_cfg=docking_data_cfg, transform_cfg=transform_cfg
+            data_cfg=docking_data_cfg,
+            transform_cfg=transform_cfg,
+            task=data_cfg.task,
         )
 
     # elif args.task == "filtering":

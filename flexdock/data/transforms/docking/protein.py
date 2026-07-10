@@ -19,6 +19,7 @@ from flexdock.data.conformers.modify import (
     modify_sidechains_old,
 )
 from flexdock.geometry.manifolds import so3, torus
+from torch_scatter import scatter_mean
 
 
 class NearbyAtomsTransform(BaseTransform):
@@ -104,6 +105,11 @@ class ProteinTransform:
         use_bb_orientation_feats: bool = False,
         bb_prior: bool = None,
         fast_updates: bool = False,
+        bb_sigma_mode: str = "fixed",
+        bb_sigma_ref_rmsd: float = 2.0,
+        bb_sigma_power: float = 1.0,
+        bb_sigma_min_scale: float = 0.5,
+        bb_sigma_max_scale: float = 2.0,
     ):
         self.flexible_backbone = flexible_backbone
         self.flexible_sidechains = flexible_sidechains
@@ -111,6 +117,56 @@ class ProteinTransform:
         self.use_bb_orientation_feats = use_bb_orientation_feats
         self.bb_prior = bb_prior
         self.fast_updates = fast_updates
+        self.bb_sigma_mode = bb_sigma_mode
+        self.bb_sigma_ref_rmsd = bb_sigma_ref_rmsd
+        self.bb_sigma_power = bb_sigma_power
+        self.bb_sigma_min_scale = bb_sigma_min_scale
+        self.bb_sigma_max_scale = bb_sigma_max_scale
+
+    def _compute_bb_sigma_scale(self, data, calpha_mask, device):
+        if self.bb_sigma_mode != "predicted":
+            return None
+
+        # Prefer model prediction field if present; fall back to residue_rmsd target.
+        flex_signal = None
+        if hasattr(data["receptor"], "residue_rmsd_pred"):
+            flex_signal = data["receptor"].residue_rmsd_pred
+        elif hasattr(data["receptor"], "residue_rmsd"):
+            flex_signal = data["receptor"].residue_rmsd
+
+        if flex_signal is None:
+            return None
+
+        flex_signal = flex_signal.to(device=device).float().reshape(-1)
+        if flex_signal.numel() == 0:
+            return None
+
+        if hasattr(data["receptor"], "nearby_residues"):
+            nearby_mask = data["receptor"].nearby_residues.to(device=device)
+            if nearby_mask.dtype != torch.bool:
+                nearby_mask = nearby_mask > 0
+            nearby_mask = nearby_mask.reshape(-1)
+            if nearby_mask.numel() == flex_signal.numel():
+                masked = torch.zeros_like(flex_signal)
+                masked[nearby_mask] = torch.clamp(flex_signal[nearby_mask], min=0.0)
+                flex_signal = masked
+            else:
+                flex_signal = torch.clamp(flex_signal, min=0.0)
+        else:
+            flex_signal = torch.clamp(flex_signal, min=0.0)
+
+        if calpha_mask.numel() == flex_signal.numel():
+            flex_signal = flex_signal[calpha_mask]
+
+        power = max(float(self.bb_sigma_power), 1e-6)
+        ref = max(float(self.bb_sigma_ref_rmsd), 1e-6)
+        scale = torch.pow(flex_signal / ref, power)
+        scale = torch.clamp(
+            scale,
+            min=float(self.bb_sigma_min_scale),
+            max=float(self.bb_sigma_max_scale),
+        )
+        return scale
 
     def __call__(self, data, t_dict, sigma_dict):
         if self.flexible_backbone:
@@ -141,8 +197,20 @@ class ProteinTransform:
 
         bb_rot_delta_holo = data["receptor"].rot_vec
 
+        sigma_scale = self._compute_bb_sigma_scale(
+            data=data,
+            calpha_mask=calpha_mask,
+            device=calpha_holo.device,
+        )
+        if sigma_scale is None:
+            bb_tr_sigma_eff = bb_tr_sigma
+            bb_rot_sigma_eff = bb_rot_sigma
+        else:
+            bb_tr_sigma_eff = bb_tr_sigma * sigma_scale
+            bb_rot_sigma_eff = bb_rot_sigma * sigma_scale
+
         calpha_atoms_mu_t = calpha_apo * (1 - t_bb_tr) + calpha_holo * t_bb_tr
-        sigma_t = bb_tr_sigma * np.sqrt(t_bb_tr * (1 - t_bb_tr))
+        sigma_t = bb_tr_sigma_eff * np.sqrt(t_bb_tr * (1 - t_bb_tr))
         calpha_atoms_t = calpha_atoms_mu_t + sigma_t * torch.randn_like(
             calpha_atoms_mu_t
         )
@@ -156,7 +224,7 @@ class ProteinTransform:
             ),
             base_point=torch.zeros_like(bb_rot_delta_holo),
         )
-        sigma_t = bb_rot_sigma * np.sqrt(t_bb_rot * (1 - t_bb_rot))
+        sigma_t = bb_rot_sigma_eff * np.sqrt(t_bb_rot * (1 - t_bb_rot))
         # Sample from IGSO(3) for given mu and sigma
         bb_rot_delta_t = so3.sample_from_igso3(mu=bb_rot_delta_mu_t, sigma=sigma_t)
 
@@ -266,4 +334,58 @@ class ProteinTransform:
                 data, data["atom"].pos, update_to_t.numpy()
             )
 
+        return data
+
+
+class UseApoInputTransform(BaseTransform):
+    """Replace current atom/receptor positions with backbone-aligned apo coords.
+
+    This ensures the model receives the true apo structure as input for the
+    residue-level RMSD prediction task, rather than the conformer-matched
+    structure used during docking training.
+    """
+
+    def __call__(self, data):
+        if not hasattr(data["atom"], "orig_aligned_apo_pos"):
+            raise ValueError(
+                "UseApoInputTransform requires atom.orig_aligned_apo_pos"
+            )
+        data["atom"].pos = data["atom"].orig_aligned_apo_pos.clone()
+        data["receptor"].pos = data["atom"].pos[data["atom"].ca_mask]
+        return data
+
+
+class ResidueRMSDTargetTransform(BaseTransform):
+    """Compute per-residue apo-holo RMSD and attach it as a regression target.
+
+    The RMSD is computed over all heavy atoms of each residue using the
+    backbone-aligned apo positions (``atom.orig_aligned_apo_pos``) and the
+    holo positions (``atom.orig_holo_pos``). Only residues flagged by
+    ``receptor.nearby_residues`` receive a non-NaN target; other residues are
+    ignored during training/validation.
+    """
+
+    def __call__(self, data):
+        if not hasattr(data["atom"], "orig_aligned_apo_pos") or not hasattr(
+            data["atom"], "orig_holo_pos"
+        ):
+            raise ValueError(
+                "ResidueRMSDTargetTransform requires both "
+                "atom.orig_aligned_apo_pos and atom.orig_holo_pos"
+            )
+
+        # Use the final aligned apo structure as the model input.
+        data["atom"].pos = data["atom"].orig_aligned_apo_pos.clone()
+        data["receptor"].pos = data["atom"].pos[data["atom"].ca_mask]
+
+        atom_rec_index = data["atom", "receptor"].edge_index[1]
+        apo_pos = data["atom"].orig_aligned_apo_pos
+        holo_pos = data["atom"].orig_holo_pos
+
+        num_residues = data["receptor"].x.shape[0]
+        per_atom_sq = ((apo_pos - holo_pos) ** 2).sum(dim=-1)
+        per_res_sq = scatter_mean(per_atom_sq, atom_rec_index, dim=0, dim_size=num_residues)
+        per_res_rmsd = torch.sqrt(per_res_sq + 1e-8)
+
+        data["receptor"].residue_rmsd = per_res_rmsd
         return data

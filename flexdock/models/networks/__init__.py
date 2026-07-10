@@ -116,6 +116,7 @@ def get_model(
             "activation_func": args.activation_func,
             "norm_affine": args.norm_affine,
             "clamped_norm_min": args.clamped_norm_min,
+            "residue_rmsd_prediction": getattr(args, "residue_rmsd_prediction", False),
         }
 
         if args.all_atoms:

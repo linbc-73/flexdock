@@ -8,6 +8,8 @@ from flexdock.data.transforms.docking.pocket import PocketTransform, UnbalancedT
 from flexdock.data.transforms.docking.protein import (
     ProteinTransform,
     NearbyAtomsTransform,
+    UseApoInputTransform,
+    ResidueRMSDTargetTransform,
 )
 from flexdock.data.transforms.docking.bb_priors import construct_bb_prior
 
@@ -99,20 +101,51 @@ class DockingTransform(BaseTransform):
         return self.apply_transform(data, t_dict, sigma_dict)
 
 
-def construct_transform(cfg, mode="train"):
+class SetZeroTimeTransform(BaseTransform):
+    """Set all diffusion time stamps to zero for deterministic prediction tasks."""
+
+    def __init__(self, all_atoms: bool = True):
+        self.all_atoms = all_atoms
+
+    def __call__(self, data):
+        t_dict = {
+            "tr": 0.0,
+            "rot": 0.0,
+            "tor": 0.0,
+            "t": 0.0,
+            "sc_tor": None,
+            "bb_tr": None,
+            "bb_rot": None,
+        }
+        set_time_t_dict(
+            data,
+            t_dict,
+            batchsize=1,
+            all_atoms=self.all_atoms,
+            device=None,
+            include_miscellaneous_atoms=False,
+        )
+        return data
+
+
+def construct_transform(cfg, mode="train", task="docking"):
+    is_residue_rmsd = task == "residue_rmsd"
     transforms = []
+
+    if is_residue_rmsd:
+        transforms.append(UseApoInputTransform())
 
     pocket_transform = PocketTransform(
         pocket_reduction=cfg.pocket.pocket_reduction,
         pocket_buffer=cfg.pocket.pocket_buffer,
         all_atoms=cfg.pocket.all_atoms,
-        flexible_backbone=cfg.flexible_backbone,
-        flexible_sidechains=cfg.flexible_sidechains,
+        flexible_backbone=cfg.flexible_backbone if not is_residue_rmsd else False,
+        flexible_sidechains=cfg.flexible_sidechains if not is_residue_rmsd else False,
         fast_updates=cfg.fast_updates,
     )
     transforms.append(pocket_transform)
 
-    if mode in ["train", "val"]:
+    if mode in ["train", "val"] and not is_residue_rmsd:
         unbalanced_transform = UnbalancedTransform(
             match_max_rmsd=cfg.unbalanced.match_max_rmsd if mode == "train" else None,
             fast_updates=cfg.fast_updates,
@@ -128,56 +161,65 @@ def construct_transform(cfg, mode="train"):
     transforms.append(nearby_atom_transform)
 
     if mode in ["train", "val"]:
-        time_config = TimeConfig(
-            sampling_alpha=cfg.time_args.sampling_alpha,
-            sampling_beta=cfg.time_args.sampling_beta,
-            bb_tr_bridge_alpha=cfg.time_args.bb_tr_bridge_alpha
-            if cfg.flexible_backbone
-            else None,
-            bb_rot_bridge_alpha=cfg.time_args.bb_rot_bridge_alpha
-            if cfg.flexible_backbone
-            else None,
-            sc_tor_bridge_alpha=cfg.time_args.sc_tor_bridge_alpha
-            if cfg.flexible_sidechains
-            else None,
-        )
+        if is_residue_rmsd:
+            transforms.append(ResidueRMSDTargetTransform())
+            transforms.append(SetZeroTimeTransform(all_atoms=cfg.pocket.all_atoms))
+        else:
+            time_config = TimeConfig(
+                sampling_alpha=cfg.time_args.sampling_alpha,
+                sampling_beta=cfg.time_args.sampling_beta,
+                bb_tr_bridge_alpha=cfg.time_args.bb_tr_bridge_alpha
+                if cfg.flexible_backbone
+                else None,
+                bb_rot_bridge_alpha=cfg.time_args.bb_rot_bridge_alpha
+                if cfg.flexible_backbone
+                else None,
+                sc_tor_bridge_alpha=cfg.time_args.sc_tor_bridge_alpha
+                if cfg.flexible_sidechains
+                else None,
+            )
 
-        sigma_config = SigmaConfig(
-            tr_sigma_max=cfg.sigma_args.tr_sigma_max,
-            tr_sigma_min=cfg.sigma_args.tr_sigma_min,
-            rot_sigma_max=cfg.sigma_args.rot_sigma_max,
-            rot_sigma_min=cfg.sigma_args.rot_sigma_min,
-            tor_sigma_max=cfg.sigma_args.tor_sigma_max,
-            tor_sigma_min=cfg.sigma_args.tor_sigma_min,
-            bb_rot_sigma=cfg.sigma_args.bb_rot_sigma if cfg.flexible_backbone else None,
-            bb_tr_sigma=cfg.sigma_args.bb_tr_sigma if cfg.flexible_backbone else None,
-            sidechain_tor_sigma=cfg.sigma_args.sidechain_tor_sigma
-            if cfg.flexible_sidechains
-            else None,
-        )
+            sigma_config = SigmaConfig(
+                tr_sigma_max=cfg.sigma_args.tr_sigma_max,
+                tr_sigma_min=cfg.sigma_args.tr_sigma_min,
+                rot_sigma_max=cfg.sigma_args.rot_sigma_max,
+                rot_sigma_min=cfg.sigma_args.rot_sigma_min,
+                tor_sigma_max=cfg.sigma_args.tor_sigma_max,
+                tor_sigma_min=cfg.sigma_args.tor_sigma_min,
+                bb_rot_sigma=cfg.sigma_args.bb_rot_sigma if cfg.flexible_backbone else None,
+                bb_tr_sigma=cfg.sigma_args.bb_tr_sigma if cfg.flexible_backbone else None,
+                sidechain_tor_sigma=cfg.sigma_args.sidechain_tor_sigma
+                if cfg.flexible_sidechains
+                else None,
+            )
 
-        lig_transform = LigandTransform(
-            no_torsion=cfg.ligand.no_torsion, fast_updates=cfg.fast_updates
-        )
+            lig_transform = LigandTransform(
+                no_torsion=cfg.ligand.no_torsion, fast_updates=cfg.fast_updates
+            )
 
-        prot_transform = ProteinTransform(
-            flexible_backbone=cfg.flexible_backbone,
-            flexible_sidechains=cfg.flexible_sidechains,
-            sidechain_tor_bridge=cfg.protein.sidechain_tor_bridge,
-            use_bb_orientation_feats=cfg.protein.use_bb_orientation_feats,
-            bb_prior=construct_bb_prior(cfg.bb_prior),
-            fast_updates=cfg.fast_updates,
-        )
+            prot_transform = ProteinTransform(
+                flexible_backbone=cfg.flexible_backbone,
+                flexible_sidechains=cfg.flexible_sidechains,
+                sidechain_tor_bridge=cfg.protein.sidechain_tor_bridge,
+                use_bb_orientation_feats=cfg.protein.use_bb_orientation_feats,
+                bb_prior=construct_bb_prior(cfg.bb_prior),
+                fast_updates=cfg.fast_updates,
+                bb_sigma_mode=cfg.protein.get("bb_sigma_mode", "fixed"),
+                bb_sigma_ref_rmsd=cfg.protein.get("bb_sigma_ref_rmsd", 2.0),
+                bb_sigma_power=cfg.protein.get("bb_sigma_power", 1.0),
+                bb_sigma_min_scale=cfg.protein.get("bb_sigma_min_scale", 0.5),
+                bb_sigma_max_scale=cfg.protein.get("bb_sigma_max_scale", 2.0),
+            )
 
-        docking_transform = DockingTransform(
-            sigma_config=sigma_config,
-            time_config=time_config,
-            lig_transform=lig_transform,
-            prot_transform=prot_transform,
-            all_atoms=cfg.pocket.all_atoms,
-            include_miscellaneous_atoms=False,
-        )
-        transforms.append(docking_transform)
+            docking_transform = DockingTransform(
+                sigma_config=sigma_config,
+                time_config=time_config,
+                lig_transform=lig_transform,
+                prot_transform=prot_transform,
+                all_atoms=cfg.pocket.all_atoms,
+                include_miscellaneous_atoms=False,
+            )
+            transforms.append(docking_transform)
 
     transform = Compose(transforms=transforms)
     return transform
