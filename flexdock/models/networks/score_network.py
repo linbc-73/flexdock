@@ -74,6 +74,7 @@ class TensorProductScoreModel(torch.nn.Module):
         activation_func: str = "ReLU",
         norm_affine: bool = True,
         clamped_norm_min: float = 1.0e-6,
+        residue_rmsd_prediction: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -118,6 +119,7 @@ class TensorProductScoreModel(torch.nn.Module):
         self.new_confidence_version = new_confidence_version
         self.atom_lig_confidence = atom_lig_confidence
         self.clamped_norm_min = clamped_norm_min
+        self.residue_rmsd_prediction = residue_rmsd_prediction
 
         activation_func = (
             activation_func.lower()
@@ -390,6 +392,16 @@ class TensorProductScoreModel(torch.nn.Module):
                     nn.Dropout(dropout),
                     self.activation,
                     nn.Linear(ns, 1),
+                )
+
+            if residue_rmsd_prediction:
+                residue_rmsd_input = 2 * self.ns if num_conv_layers >= 3 else self.ns
+                self.residue_rmsd_head = nn.Sequential(
+                    nn.Linear(residue_rmsd_input, ns),
+                    self.activation,
+                    nn.Dropout(dropout),
+                    nn.Linear(ns, 1),
+                    nn.ReLU(),
                 )
         rank_zero_info(f"Unused arguments: {kwargs}")
 
@@ -968,6 +980,18 @@ class TensorProductScoreModel(torch.nn.Module):
         else:
             bb_tr_pred = bb_rot_pred = torch.empty(0, device=tr_pred.device)
 
+        if self.residue_rmsd_prediction:
+            scalar_rec_attr = (
+                torch.cat(
+                    [rec_node_attr[:, : self.ns], rec_node_attr[:, -self.ns :]], dim=1
+                )
+                if self.num_conv_layers >= 3
+                else rec_node_attr[:, : self.ns]
+            )
+            residue_rmsd_pred = self.residue_rmsd_head(scalar_rec_attr).squeeze(-1)
+        else:
+            residue_rmsd_pred = torch.empty(0, device=tr_pred.device)
+
         outputs = {
             "tr_pred": tr_pred,
             "rot_pred": rot_pred,
@@ -975,6 +999,7 @@ class TensorProductScoreModel(torch.nn.Module):
             "bb_tr_pred": bb_tr_pred,
             "bb_rot_pred": bb_rot_pred,
             "sc_tor_pred": sc_tor_pred,
+            "residue_rmsd_pred": residue_rmsd_pred,
         }
         return outputs
 

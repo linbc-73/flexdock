@@ -316,6 +316,11 @@ def sampling(
     diff_temp_sigma_data: tuple = None,
     flow_temp_scale_0: tuple = None,
     flow_temp_scale_1: tuple = None,
+    bb_sigma_mode: str = "fixed",
+    bb_sigma_ref_rmsd: float = 2.0,
+    bb_sigma_power: float = 1.0,
+    bb_sigma_min_scale: float = 0.5,
+    bb_sigma_max_scale: float = 2.0,
 ):
     if model_args.flexible_sidechains:
         # If in the whole batch there are no flexible residues, we have to delete the
@@ -469,6 +474,9 @@ def sampling(
                     bb_tr_drift = outputs["bb_tr_pred"].float()
                     bb_rot_drift = outputs["bb_rot_pred"].float()
                     sidechain_tor_score = outputs["sc_tor_pred"].float()
+                    residue_rmsd_pred = outputs.get("residue_rmsd_pred", None)
+                    if residue_rmsd_pred is not None:
+                        residue_rmsd_pred = residue_rmsd_pred.float()
 
                 else:
                     outputs = model(complex_graph_batch)
@@ -479,6 +487,7 @@ def sampling(
                     bb_tr_drift = outputs["bb_tr_pred"]
                     bb_rot_drift = outputs["bb_rot_pred"]
                     sidechain_tor_score = outputs["sc_tor_pred"]
+                    residue_rmsd_pred = outputs.get("residue_rmsd_pred", None)
 
             if len(bb_tr_drift.shape) == 3:
                 bb_tr_drift = bb_tr_drift[:, -1]
@@ -773,13 +782,40 @@ def sampling(
                     bb_tr_z = torch.normal(mean=0, std=1, size=bb_tr_drift.shape)
                     bb_rot_z = torch.normal(mean=0, std=1, size=bb_rot_drift.shape)
 
-                bb_tr_perturb = (
-                    bb_tr_drift * dt_bb_tr + bb_tr_z * np.sqrt(dt_bb_tr) * bb_tr_sigma
-                ).numpy()
-                bb_rot_perturb = (
-                    bb_rot_drift * dt_bb_rot
-                    + bb_rot_z * np.sqrt(dt_bb_rot) * bb_rot_sigma
-                ).numpy()
+                    bb_tr_sigma_eff = bb_tr_sigma
+                    bb_rot_sigma_eff = bb_rot_sigma
+                    if (
+                        bb_sigma_mode == "predicted"
+                        and residue_rmsd_pred is not None
+                        and hasattr(complex_graph_batch["receptor"], "nearby_residues")
+                    ):
+                        nearby_mask = complex_graph_batch["receptor"].nearby_residues
+                        if nearby_mask.dtype != torch.bool:
+                            nearby_mask = nearby_mask > 0
+                        flex_signal = residue_rmsd_pred.new_zeros(residue_rmsd_pred.shape)
+                        flex_signal[nearby_mask] = torch.clamp(
+                            residue_rmsd_pred[nearby_mask], min=0.0
+                        )
+                        if flex_signal.numel() > 0:
+                            power = max(float(bb_sigma_power), 1e-6)
+                            ref = max(float(bb_sigma_ref_rmsd), 1e-6)
+                            scale = torch.pow(flex_signal / ref, power)
+                            scale = torch.clamp(
+                                scale,
+                                min=float(bb_sigma_min_scale),
+                                max=float(bb_sigma_max_scale),
+                            )
+                            bb_tr_sigma_eff = bb_tr_sigma * scale
+                            bb_rot_sigma_eff = bb_rot_sigma * scale
+
+                    bb_tr_perturb = (
+                        bb_tr_drift * dt_bb_tr
+                        + bb_tr_z * np.sqrt(dt_bb_tr) * bb_tr_sigma_eff
+                    ).numpy()
+                    bb_rot_perturb = (
+                        bb_rot_drift * dt_bb_rot
+                        + bb_rot_z * np.sqrt(dt_bb_rot) * bb_rot_sigma_eff
+                    ).numpy()
 
             for i, complex_graph in enumerate(data_list):
                 idx_start = i * calpha_atoms_per_molecule

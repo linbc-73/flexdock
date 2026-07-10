@@ -196,6 +196,11 @@ def config_from_args(args: argparse.Namespace) -> DictConfig:
         "protein": {
             "sidechain_tor_bridge": args.sidechain_tor_bridge,
             "use_bb_orientation_feats": args.use_bb_orientation_feats,
+            "bb_sigma_mode": getattr(args, "bb_sigma_mode", "fixed"),
+            "bb_sigma_ref_rmsd": getattr(args, "bb_sigma_ref_rmsd", 2.0),
+            "bb_sigma_power": getattr(args, "bb_sigma_power", 1.0),
+            "bb_sigma_min_scale": getattr(args, "bb_sigma_min_scale", 0.5),
+            "bb_sigma_max_scale": getattr(args, "bb_sigma_max_scale", 2.0),
         },
         "pocket": {
             "pocket_reduction": True,

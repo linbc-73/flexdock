@@ -178,6 +178,39 @@ def setup_callbacks(args, run_dir, task: str = "docking"):
     elif task == "relaxation":
         return setup_relaxation_callbacks(args=args, run_dir=run_dir)
 
+    elif task == "residue_rmsd":
+        return setup_residue_rmsd_callbacks(args=args, run_dir=run_dir)
+
     else:
         assert task == "filtering"
         return setup_filtering_callbacks(args=args, run_dir=run_dir)
+
+
+def setup_residue_rmsd_callbacks(args, run_dir):
+    best_model_checkpoint = ModelCheckpoint(
+        dirpath=run_dir,
+        filename="best_model",
+        monitor="val_loss",
+        mode="min",
+        every_n_epochs=1,
+        save_on_train_epoch_end=True,
+        save_top_k=1,
+    )
+    best_model_checkpoint.FILE_EXTENSION = ".pt"
+    callbacks = [best_model_checkpoint]
+
+    last_model_checkpoint = ModelCheckpoint(
+        dirpath=run_dir,
+        filename="last_model",
+        monitor=None,
+        every_n_epochs=1,
+        save_on_train_epoch_end=True,
+        save_top_k=1,
+    )
+    last_model_checkpoint.FILE_EXTENSION = ".pt"
+    callbacks.append(last_model_checkpoint)
+
+    if getattr(args, "wandb", False):
+        lr_monitor = LearningRateMonitor(logging_interval="epoch")
+        callbacks.append(lr_monitor)
+    return callbacks
