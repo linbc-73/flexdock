@@ -444,6 +444,15 @@ def sampling(
             complex_graph_batch = complex_graph_batch.to(device)
             b = complex_graph_batch.num_graphs
 
+            # Prefer residue RMSD predictions attached by an independent model;
+            # the docking model may emit an empty tensor when residue_rmsd_prediction
+            # is disabled, which would break the predicted-sigma path below.
+            batch_rmsd_pred = getattr(
+                complex_graph_batch["receptor"], "residue_rmsd_pred", None
+            )
+            if batch_rmsd_pred is not None and batch_rmsd_pred.numel() > 0:
+                batch_rmsd_pred = batch_rmsd_pred.float()
+
             set_time(
                 complex_graph_batch,
                 t_schedule[t_idx] if t_schedule is not None else None,
@@ -474,9 +483,12 @@ def sampling(
                     bb_tr_drift = outputs["bb_tr_pred"].float()
                     bb_rot_drift = outputs["bb_rot_pred"].float()
                     sidechain_tor_score = outputs["sc_tor_pred"].float()
-                    residue_rmsd_pred = outputs.get("residue_rmsd_pred", None)
-                    if residue_rmsd_pred is not None:
-                        residue_rmsd_pred = residue_rmsd_pred.float()
+                    if batch_rmsd_pred is not None:
+                        residue_rmsd_pred = batch_rmsd_pred
+                    else:
+                        residue_rmsd_pred = outputs.get("residue_rmsd_pred", None)
+                        if residue_rmsd_pred is not None:
+                            residue_rmsd_pred = residue_rmsd_pred.float()
 
                 else:
                     outputs = model(complex_graph_batch)
@@ -487,7 +499,10 @@ def sampling(
                     bb_tr_drift = outputs["bb_tr_pred"]
                     bb_rot_drift = outputs["bb_rot_pred"]
                     sidechain_tor_score = outputs["sc_tor_pred"]
-                    residue_rmsd_pred = outputs.get("residue_rmsd_pred", None)
+                    if batch_rmsd_pred is not None:
+                        residue_rmsd_pred = batch_rmsd_pred
+                    else:
+                        residue_rmsd_pred = outputs.get("residue_rmsd_pred", None)
 
             if len(bb_tr_drift.shape) == 3:
                 bb_tr_drift = bb_tr_drift[:, -1]
