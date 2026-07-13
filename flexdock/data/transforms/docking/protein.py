@@ -206,6 +206,9 @@ class ProteinTransform:
             bb_tr_sigma_eff = bb_tr_sigma
             bb_rot_sigma_eff = bb_rot_sigma
         else:
+            # sigma_scale is per-CA/per-residue; expand last dim so it
+            # broadcasts with the 3D coordinate tensors below.
+            sigma_scale = sigma_scale.unsqueeze(-1)
             bb_tr_sigma_eff = bb_tr_sigma * sigma_scale
             bb_rot_sigma_eff = bb_rot_sigma * sigma_scale
 
@@ -352,6 +355,44 @@ class UseApoInputTransform(BaseTransform):
             )
         data["atom"].pos = data["atom"].orig_aligned_apo_pos.clone()
         data["receptor"].pos = data["atom"].pos[data["atom"].ca_mask]
+        return data
+
+
+class ComputeResidueRMSDTransform(BaseTransform):
+    """Compute per-residue apo-holo RMSD and attach it to the receptor store.
+
+    The RMSD is computed over all heavy atoms of each residue using the
+    backbone-aligned apo positions (``atom.orig_aligned_apo_pos``) and the
+    holo positions (``atom.orig_holo_pos``). Unlike
+    :class:`ResidueRMSDTargetTransform`, this transform does **not** modify
+    ``atom.pos``; it only stores ``receptor.residue_rmsd`` so that downstream
+    transforms (e.g. flexible-backbone noise scaling) can use the ground-truth
+    flexibility signal.
+    """
+
+    def __call__(self, data):
+        if not hasattr(data["atom"], "orig_aligned_apo_pos") or not hasattr(
+            data["atom"], "orig_holo_pos"
+        ):
+            raise ValueError(
+                "ComputeResidueRMSDTransform requires both "
+                "atom.orig_aligned_apo_pos and atom.orig_holo_pos"
+            )
+
+        atom_rec_index = data[
+            "atom", "atom_rec_contact", "receptor"
+        ].edge_index[1]
+        apo_pos = data["atom"].orig_aligned_apo_pos
+        holo_pos = data["atom"].orig_holo_pos
+
+        num_residues = data["receptor"].x.shape[0]
+        per_atom_sq = ((apo_pos - holo_pos) ** 2).sum(dim=-1)
+        per_res_sq = scatter_mean(
+            per_atom_sq, atom_rec_index, dim=0, dim_size=num_residues
+        )
+        per_res_rmsd = torch.sqrt(per_res_sq + 1e-8)
+
+        data["receptor"].residue_rmsd = per_res_rmsd
         return data
 
 

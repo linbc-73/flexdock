@@ -183,6 +183,16 @@ def sample_from_igso3(
     if isinstance(mu, torch.Tensor):
         mu = mu.numpy()
 
+    if torch.is_tensor(sigma):
+        if sigma.numel() == 1:
+            sigma = sigma.item()
+        elif torch.allclose(sigma, torch.zeros_like(sigma)):
+            return torch.from_numpy(mu)
+        else:
+            # Per-element sigma is not natively supported by the precomputed
+            # IGSO(3) sampler. Fall back to the mean sigma as a scalar.
+            sigma = sigma.float().mean().item()
+
     if not sigma:
         if not torch.is_tensor(mu):
             return torch.from_numpy(mu)

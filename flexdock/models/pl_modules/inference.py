@@ -23,6 +23,7 @@ from flexdock.models.pl_modules.relaxation import (
 )
 from flexdock.sampling.docking import sampling, sampling_fast
 from flexdock.sampling.relaxation.sampling import sampling_on_batch
+from flexdock.data.transforms.docking import SetZeroTimeTransform
 from flexdock.geometry.ops import rigid_transform_kabsch
 
 from flexdock.metrics.relaxation import (
@@ -32,10 +33,11 @@ from flexdock.metrics.relaxation import (
 
 
 class InferenceModule(LightningModule):
-    def __init__(self, args, sampler_cfg, configs, checkpoints):
+    def __init__(self, args, sampler_cfg, configs, checkpoints, residue_rmsd_module=None):
         super().__init__()
         self.cfg = args
         self.sampler_cfg = sampler_cfg
+        self.residue_rmsd_module = residue_rmsd_module
         self.setup_inference_tasks(configs=configs, checkpoints=checkpoints)
 
         self.time_metric = MeanMetric()
@@ -94,6 +96,28 @@ class InferenceModule(LightningModule):
             self.relaxation_module = None
             self.relaxation_args = None
 
+    def attach_residue_rmsd_predictions(self, batch):
+        """Run an independent residue_rmsd model and write predictions into the batch."""
+        if self.residue_rmsd_module is None:
+            return batch
+
+        if not batch["success"][0]:
+            return batch
+
+        # The inference graph already has apo positions; we only need to set
+        # diffusion time to zero (as in the residue_rmsd training task).
+        all_atoms = "atom" in batch.node_types
+        zero_time_transform = SetZeroTimeTransform(all_atoms=all_atoms)
+        rmsd_batch = zero_time_transform(batch.clone())
+        rmsd_batch = rmsd_batch.to(self.device)
+
+        with torch.no_grad():
+            outputs = self.residue_rmsd_module(rmsd_batch)
+            pred = outputs["residue_rmsd_pred"].detach().cpu()
+
+        batch["receptor"].residue_rmsd_pred = pred
+        return batch
+
     def predict_step(self, batch, batch_idx, dataloader_idx: int = 0):
         name = batch["name"][0]
         if self.cfg.only_run_relaxation:
@@ -142,6 +166,10 @@ class InferenceModule(LightningModule):
         if not batch["success"][0]:
             logging.info(f"Skipping complex {name} because preprocessing failed")
             return None
+
+        # Optionally run an independent residue_rmsd model to populate
+        # receptor.residue_rmsd_pred before backbone sampling.
+        batch = self.attach_residue_rmsd_predictions(batch)
 
         start_time = time.time()
         N = self.cfg.samples_per_complex

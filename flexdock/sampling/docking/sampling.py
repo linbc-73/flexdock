@@ -805,8 +805,8 @@ def sampling(
                                 min=float(bb_sigma_min_scale),
                                 max=float(bb_sigma_max_scale),
                             )
-                            bb_tr_sigma_eff = bb_tr_sigma * scale
-                            bb_rot_sigma_eff = bb_rot_sigma * scale
+                            bb_tr_sigma_eff = bb_tr_sigma * scale.unsqueeze(-1)
+                            bb_rot_sigma_eff = bb_rot_sigma * scale.unsqueeze(-1)
 
                     bb_tr_perturb = (
                         bb_tr_drift * dt_bb_tr

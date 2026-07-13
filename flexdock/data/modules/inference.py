@@ -139,6 +139,7 @@ class PredictionDataset(Dataset):
             "atom_subset_mask": atom_subset_mask,
             "pocket_center": pocket_center,
             "pocket_atom_mask": pocket_atom_mask,
+            "pocket_residue_mask": pocket_residue_mask,
         }
         return pocket_info
 
@@ -148,6 +149,7 @@ class PredictionDataset(Dataset):
         amber_subset_mask = pocket_info["amber_subset_mask"]
 
         pocket_atom_mask = pocket_info["pocket_atom_mask"]
+        pocket_residue_mask = pocket_info["pocket_residue_mask"]
 
         complex_graph.amber_subset_mask = amber_subset_mask
 
@@ -175,6 +177,7 @@ class PredictionDataset(Dataset):
         complex_graph["receptor"].lens_receptors = complex_graph[
             "receptor"
         ].lens_receptors[res_mask]
+        complex_graph["receptor"].nearby_residues = pocket_residue_mask[res_mask]
 
         # Update pocket + buffer atom attributes
         complex_graph["atom"].x = complex_graph["atom"].x[atom_mask]

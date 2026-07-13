@@ -9,6 +9,7 @@ from flexdock.data.modules.inference import InferenceDataModule
 from flexdock.data.feature.featurizer import FeaturizerConfig
 from flexdock.data.write.writer import FlexDockWriter
 from flexdock.models.pl_modules.inference import InferenceModule
+from flexdock.models.pl_modules.residue_rmsd import ResidueRMSDModule
 from flexdock.utils.configs import config_from_args
 
 
@@ -206,6 +207,21 @@ def parse_args():
     parser.add_argument("--relax_ligand_sigma", type=float, default=None)
     parser.add_argument("--relax_atom_sigma", type=float, default=None)
 
+    # Optional independent residue RMSD model for predicted backbone sigma scaling.
+    parser.add_argument(
+        "--residue_rmsd_model_dir",
+        type=str,
+        default=None,
+        help="Directory containing a trained ResidueRMSDModule checkpoint and model_parameters.yml. "
+             "If provided, its predictions are injected into the inference graph as receptor.residue_rmsd_pred.",
+    )
+    parser.add_argument(
+        "--residue_rmsd_ckpt",
+        type=str,
+        default="best_model.pt",
+        help="Checkpoint name inside --residue_rmsd_model_dir.",
+    )
+
     return parser.parse_args()
 
 
@@ -354,6 +370,22 @@ def predict():
     # Gather checkpoint files and configs
     checkpoints, configs = prepare_ckpt_and_args(args)
 
+    # Optionally load an independent residue RMSD model.
+    residue_rmsd_module = None
+    if args.residue_rmsd_model_dir is not None:
+        rmsd_cfg_path = f"{args.residue_rmsd_model_dir}/model_parameters.yml"
+        rmsd_ckpt_path = f"{args.residue_rmsd_model_dir}/{args.residue_rmsd_ckpt}"
+        print(f"Loading residue RMSD model from {rmsd_ckpt_path}", flush=True)
+        rmsd_cfg = OmegaConf.load(rmsd_cfg_path)
+        residue_rmsd_module = ResidueRMSDModule.load_from_checkpoint(
+            rmsd_ckpt_path,
+            model_cfg=rmsd_cfg.model,
+            sigma_cfg=rmsd_cfg.sigma,
+            training_cfg=rmsd_cfg.training,
+        )
+        residue_rmsd_module.eval()
+        residue_rmsd_module.freeze()
+
     if not args.only_run_relaxation:
         docking_cfg = configs["docking"]
         sampler_cfg = docking_cfg.get("sampler", None)
@@ -384,6 +416,7 @@ def predict():
         sampler_cfg=sampler_cfg,
         configs=configs,
         checkpoints=checkpoints,
+        residue_rmsd_module=residue_rmsd_module,
     )
     model_module.eval()
 

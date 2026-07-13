@@ -10,6 +10,7 @@ from flexdock.data.transforms.docking.protein import (
     NearbyAtomsTransform,
     UseApoInputTransform,
     ResidueRMSDTargetTransform,
+    ComputeResidueRMSDTransform,
 )
 from flexdock.data.transforms.docking.bb_priors import construct_bb_prior
 
@@ -210,6 +211,9 @@ def construct_transform(cfg, mode="train", task="docking"):
                 bb_sigma_min_scale=cfg.protein.get("bb_sigma_min_scale", 0.5),
                 bb_sigma_max_scale=cfg.protein.get("bb_sigma_max_scale", 2.0),
             )
+
+            if cfg.protein.get("bb_sigma_mode", "fixed") == "predicted":
+                transforms.append(ComputeResidueRMSDTransform())
 
             docking_transform = DockingTransform(
                 sigma_config=sigma_config,
