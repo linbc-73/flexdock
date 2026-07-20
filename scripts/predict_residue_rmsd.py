@@ -90,6 +90,11 @@ def parse_args():
         default=None,
         help="Limit to first N complexes (for testing)",
     )
+    parser.add_argument(
+        "--cache_path",
+        default=None,
+        help="Override the cache directory from the config.",
+    )
     return parser.parse_args()
 
 
@@ -100,7 +105,7 @@ def main():
     OmegaConf.resolve(cfg)
 
     split_path = args.split if args.split is not None else cfg.data.split_val
-    cache_path = cfg.data.cache_path
+    cache_path = args.cache_path if args.cache_path is not None else cfg.data.cache_path
     batch_size = args.batch_size if args.batch_size is not None else cfg.data.batch_size
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -156,19 +161,40 @@ def main():
             batch_idx = batch["receptor"].batch.cpu()
             names = batch.name  # list of complex names
 
+            # Real PDB residue identifiers. They are added by the preprocessing
+            # pipeline (or the patch_cache_residue_ids.py script for old caches).
+            if not (
+                hasattr(batch["receptor"], "chain_idx")
+                and hasattr(batch["receptor"], "residue_number")
+                and hasattr(batch, "chain_letters")
+            ):
+                raise ValueError(
+                    "Cached graph is missing chain/residue IDs. "
+                    "Run scripts/patch_cache_residue_ids.py on the cache, "
+                    "or regenerate the cache with the updated preprocessing."
+                )
+            chain_idx = batch["receptor"].chain_idx.cpu()
+            residue_number = batch["receptor"].residue_number.cpu()
+            chain_letters = batch.chain_letters  # list of lists
+
             # If a complex has no nearby residues in this batch, skip cheaply.
             batch_rows = []
             for i in range(len(mask)):
                 if not mask[i]:
                     continue
-                complex_name = names[batch_idx[i].item()]
+                graph_idx = batch_idx[i].item()
+                complex_name = names[graph_idx]
                 if isinstance(complex_name, list):
                     complex_name = complex_name[0]
-                # Per-complex residue index (after pocket reduction).
+
+                chain_id = chain_letters[graph_idx][chain_idx[i].item()]
+                res_id = residue_number[i].item()
+
                 batch_rows.append(
                     {
                         "complex_name": complex_name,
-                        "batch_residue_idx": i,
+                        "chain_id": chain_id,
+                        "residue_id": res_id,
                         "predicted_rmsd": f"{pred[i].item():.4f}",
                         "target_rmsd": f"{target[i].item():.4f}",
                     }
@@ -186,7 +212,8 @@ def main():
             f,
             fieldnames=[
                 "complex_name",
-                "batch_residue_idx",
+                "chain_id",
+                "residue_id",
                 "predicted_rmsd",
                 "target_rmsd",
             ],

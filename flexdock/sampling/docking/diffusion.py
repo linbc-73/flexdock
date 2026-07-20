@@ -119,6 +119,67 @@ def t_to_sigma(t_dict, args: SigmaConfig):
     return sigma_dict
 
 
+def compute_residue_flexibility_scale(
+    residue_rmsd_pred,
+    nearby_residues,
+    ref_rmsd=2.0,
+    power=1.0,
+    min_scale=0.5,
+    max_scale=2.0,
+):
+    """Compute a per-residue sigma scaling factor from predicted residue RMSD.
+
+    Non-nearby residues (as indicated by ``nearby_residues``) are assigned the
+    minimum scale, while nearby residues are scaled by
+    ``(rmsd / ref_rmsd) ** power`` and clipped to ``[min_scale, max_scale]``.
+    """
+    nearby_mask = nearby_residues
+    if nearby_mask.dtype != torch.bool:
+        nearby_mask = nearby_mask > 0
+
+    flex_signal = residue_rmsd_pred.new_zeros(residue_rmsd_pred.shape)
+    flex_signal[nearby_mask] = torch.clamp(residue_rmsd_pred[nearby_mask], min=0.0)
+
+    power = max(float(power), 1e-6)
+    ref = max(float(ref_rmsd), 1e-6)
+    scale = torch.pow(flex_signal / ref, power)
+    scale = torch.clamp(scale, min=float(min_scale), max=float(max_scale))
+    return scale
+
+
+def map_residue_scale_to_rotatable_edges(scale, complex_graph_batch):
+    """Map per-residue flexibility scales to rotatable sidechain torsion edges.
+
+    ``scale`` must be a 1-D tensor indexed by the batched receptor node index.
+    The returned tensor has one entry per rotatable edge (where
+    ``atom->atom_bond->atom.edge_mask`` is True) and is suitable for scaling
+    ``sc_tor_sigma`` during sampling.
+    """
+    edge_store = complex_graph_batch["atom", "atom_bond", "atom"]
+    if not hasattr(edge_store, "res_to_rotate"):
+        return None
+
+    edge_index = edge_store.edge_index
+    edge_mask = edge_store.edge_mask
+    res_to_rotate = edge_store.res_to_rotate
+
+    atom_batch = complex_graph_batch["atom"].batch
+    receptor_batch = complex_graph_batch["receptor"].batch
+
+    num_res_per_graph = torch.bincount(receptor_batch)
+    res_offsets = torch.cat(
+        [
+            receptor_batch.new_zeros(1),
+            torch.cumsum(num_res_per_graph, dim=0)[:-1],
+        ]
+    )
+
+    edge_graph_idx = atom_batch[edge_index[0, edge_mask]]
+    edge_res_offsets = res_offsets[edge_graph_idx]
+    edge_res_idx = res_to_rotate[edge_mask, 0].long() + edge_res_offsets
+    return scale[edge_res_idx]
+
+
 def sinusoidal_embedding(timesteps, embedding_dim, max_positions=10000):
     """from https://github.com/hojonathanho/diffusion/blob/master/diffusion_tf/nn.py"""
     assert len(timesteps.shape) == 1

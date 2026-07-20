@@ -210,6 +210,7 @@ def construct_transform(cfg, mode="train", task="docking"):
                 bb_sigma_power=cfg.protein.get("bb_sigma_power", 1.0),
                 bb_sigma_min_scale=cfg.protein.get("bb_sigma_min_scale", 0.5),
                 bb_sigma_max_scale=cfg.protein.get("bb_sigma_max_scale", 2.0),
+                bb_bridge_drift_clip=cfg.protein.get("bb_bridge_drift_clip", None),
             )
 
             if cfg.protein.get("bb_sigma_mode", "fixed") == "predicted":

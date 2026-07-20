@@ -1,3 +1,5 @@
+from typing import Optional
+
 from torch_geometric.transforms import BaseTransform
 
 import numpy as np
@@ -110,6 +112,7 @@ class ProteinTransform:
         bb_sigma_power: float = 1.0,
         bb_sigma_min_scale: float = 0.5,
         bb_sigma_max_scale: float = 2.0,
+        bb_bridge_drift_clip: Optional[float] = None,
     ):
         self.flexible_backbone = flexible_backbone
         self.flexible_sidechains = flexible_sidechains
@@ -122,17 +125,21 @@ class ProteinTransform:
         self.bb_sigma_power = bb_sigma_power
         self.bb_sigma_min_scale = bb_sigma_min_scale
         self.bb_sigma_max_scale = bb_sigma_max_scale
+        self.bb_bridge_drift_clip = bb_bridge_drift_clip
 
     def _compute_bb_sigma_scale(self, data, calpha_mask, device):
         if self.bb_sigma_mode != "predicted":
             return None
 
-        # Prefer model prediction field if present; fall back to residue_rmsd target.
+        # Prefer model prediction field if present; fall back to ground-truth
+        # residue_rmsd or the rmsd_res field stored in residue_flexibility caches.
         flex_signal = None
         if hasattr(data["receptor"], "residue_rmsd_pred"):
             flex_signal = data["receptor"].residue_rmsd_pred
         elif hasattr(data["receptor"], "residue_rmsd"):
             flex_signal = data["receptor"].residue_rmsd
+        elif hasattr(data["receptor"], "rmsd_res"):
+            flex_signal = data["receptor"].rmsd_res
 
         if flex_signal is None:
             return None
@@ -212,6 +219,15 @@ class ProteinTransform:
             bb_tr_sigma_eff = bb_tr_sigma * sigma_scale
             bb_rot_sigma_eff = bb_rot_sigma * sigma_scale
 
+        # Save per-residue sigma scale for the model to use as an explicit
+        # conditioning feature when predicting backbone drift.
+        if self.bb_sigma_mode == "predicted":
+            data["receptor"].bb_sigma_scale = sigma_scale.squeeze(-1).detach().clone()
+        else:
+            data["receptor"].bb_sigma_scale = torch.ones(
+                calpha_holo.shape[0], device=calpha_holo.device, dtype=torch.float
+            )
+
         calpha_atoms_mu_t = calpha_apo * (1 - t_bb_tr) + calpha_holo * t_bb_tr
         sigma_t = bb_tr_sigma_eff * np.sqrt(t_bb_tr * (1 - t_bb_tr))
         calpha_atoms_t = calpha_atoms_mu_t + sigma_t * torch.randn_like(
@@ -239,6 +255,17 @@ class ProteinTransform:
 
         if not torch.is_tensor(data.bb_rot_drift):
             data.bb_rot_drift = torch.tensor(data.bb_rot_drift)
+
+        # Clip extreme drift targets to prevent numerical instability when
+        # t is close to 1 and/or flexible regions use large sigma scales.
+        if self.bb_bridge_drift_clip is not None:
+            clip_val = float(self.bb_bridge_drift_clip)
+            data.bb_tr_drift = torch.clamp(
+                data.bb_tr_drift, min=-clip_val, max=clip_val
+            )
+            data.bb_rot_drift = torch.clamp(
+                data.bb_rot_drift, min=-clip_val, max=clip_val
+            )
 
         # Since we apply updates to data['atom'].pos, we need R_holo.T * R_t
         rot_holo_to_t = Rotation.from_rotvec(

@@ -749,11 +749,23 @@ def parse_docking_args(parser):
     )
     parser.add_argument("--sidechain_tor_bridge", action="store_true", help="")
     parser.add_argument("--bridge_norm_clip", type=float, default=None, help="")
+    parser.add_argument(
+        "--bb_bridge_drift_clip",
+        type=float,
+        default=None,
+        help="Clip backbone bridge drift targets to [-value, value]. None disables clipping.",
+    )
     parser.add_argument("--bb_tr_bridge_alpha", type=float, default=0.01, help="")
     parser.add_argument("--bb_rot_bridge_alpha", type=float, default=0.01, help="")
     parser.add_argument("--sc_tor_bridge_alpha", type=float, default=0.01, help="")
     parser.add_argument(
         "--use_bb_orientation_feats", action="store_true", default=False, help=""
+    )
+    parser.add_argument(
+        "--use_bb_sigma_scale_feat",
+        action="store_true",
+        default=False,
+        help="Concatenate per-residue backbone sigma scale to the backbone drift prediction head.",
     )
     parser.add_argument(
         "--only_nearby_residues_atomic", action="store_true", default=False, help=""

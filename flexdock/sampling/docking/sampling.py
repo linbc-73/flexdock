@@ -22,6 +22,8 @@ from flexdock.sampling.docking.diffusion import (
     set_time,
     get_t_schedule,
     bridge_transform_t,
+    compute_residue_flexibility_scale,
+    map_residue_scale_to_rotatable_edges,
 )
 from scipy.spatial.transform import Rotation as R
 
@@ -321,6 +323,11 @@ def sampling(
     bb_sigma_power: float = 1.0,
     bb_sigma_min_scale: float = 0.5,
     bb_sigma_max_scale: float = 2.0,
+    sc_tor_sigma_mode: str = "fixed",
+    sc_tor_sigma_ref_rmsd: float = 2.0,
+    sc_tor_sigma_power: float = 1.0,
+    sc_tor_sigma_min_scale: float = 0.5,
+    sc_tor_sigma_max_scale: float = 2.0,
 ):
     if model_args.flexible_sidechains:
         # If in the whole batch there are no flexible residues, we have to delete the
@@ -336,6 +343,10 @@ def sampling(
     N = len(data_list)
     trajectory = []
     sidechain_trajectory = []
+
+    # Statistics for sidechain torsion drift vs noise (only populated when debug_sidechain=True)
+    sc_tor_drift_norms = []
+    sc_tor_noise_norms = []
 
     tr_schedule = schedules["tr"]
     rot_schedule = schedules["rot"]
@@ -416,6 +427,8 @@ def sampling(
         sidechain_tor_score_list = []
         bb_tr_drift_list = []
         bb_rot_drift_list = []
+        bb_scale_list = []
+        sc_tor_edge_scale_list = []
 
         t_dict = {
             "tr": t_tr,
@@ -504,6 +517,46 @@ def sampling(
                     else:
                         residue_rmsd_pred = outputs.get("residue_rmsd_pred", None)
 
+            if (
+                residue_rmsd_pred is not None
+                and residue_rmsd_pred.numel() > 0
+                and hasattr(complex_graph_batch["receptor"], "nearby_residues")
+            ):
+                if bb_sigma_mode == "predicted":
+                    bb_scale = compute_residue_flexibility_scale(
+                        residue_rmsd_pred,
+                        complex_graph_batch["receptor"].nearby_residues,
+                        ref_rmsd=bb_sigma_ref_rmsd,
+                        power=bb_sigma_power,
+                        min_scale=bb_sigma_min_scale,
+                        max_scale=bb_sigma_max_scale,
+                    )
+                else:
+                    bb_scale = None
+
+                if sc_tor_sigma_mode == "predicted":
+                    sc_tor_scale = compute_residue_flexibility_scale(
+                        residue_rmsd_pred,
+                        complex_graph_batch["receptor"].nearby_residues,
+                        ref_rmsd=sc_tor_sigma_ref_rmsd,
+                        power=sc_tor_sigma_power,
+                        min_scale=sc_tor_sigma_min_scale,
+                        max_scale=sc_tor_sigma_max_scale,
+                    )
+                    sc_tor_edge_scale = map_residue_scale_to_rotatable_edges(
+                        sc_tor_scale, complex_graph_batch
+                    )
+                else:
+                    sc_tor_edge_scale = None
+            else:
+                bb_scale = None
+                sc_tor_edge_scale = None
+
+            bb_scale_list.append(bb_scale.cpu() if bb_scale is not None else None)
+            sc_tor_edge_scale_list.append(
+                sc_tor_edge_scale.cpu() if sc_tor_edge_scale is not None else None
+            )
+
             if len(bb_tr_drift.shape) == 3:
                 bb_tr_drift = bb_tr_drift[:, -1]
                 bb_rot_drift = bb_rot_drift[:, -1]
@@ -548,6 +601,18 @@ def sampling(
         sidechain_tor_score = torch.cat(sidechain_tor_score_list, dim=0)
         bb_tr_drift = torch.cat(bb_tr_drift_list, dim=0)
         bb_rot_drift = torch.cat(bb_rot_drift_list, dim=0)
+
+        bb_scale_all = None
+        if bb_sigma_mode == "predicted" and all(
+            s is not None for s in bb_scale_list
+        ):
+            bb_scale_all = torch.cat(bb_scale_list, dim=0)
+
+        sc_tor_edge_scale_all = None
+        if sc_tor_sigma_mode == "predicted" and all(
+            s is not None for s in sc_tor_edge_scale_list
+        ):
+            sc_tor_edge_scale_all = torch.cat(sc_tor_edge_scale_list, dim=0)
 
         if model_args.lig_transform_type == "flow":
             tr_perturb = tr_score.cpu() * dt_tr
@@ -690,6 +755,13 @@ def sampling(
             )
 
         if model_args.flexible_sidechains:
+            sidechain_tor_sigma_eff = sidechain_tor_sigma
+            if (
+                sc_tor_sigma_mode == "predicted"
+                and sc_tor_edge_scale_all is not None
+            ):
+                sidechain_tor_sigma_eff = sidechain_tor_sigma * sc_tor_edge_scale_all
+
             if sidechain_tor_bridge:
                 dt_sidechain_tor = (
                     sc_tor_schedule[t_idx + 1] - sc_tor_schedule[t_idx]
@@ -710,12 +782,23 @@ def sampling(
                         sidechain_tor_z = torch.normal(
                             mean=0, std=1, size=sidechain_tor_score.shape
                         )
-                    sidechain_tor_perturb = (
-                        dt_sidechain_tor * sidechain_tor_score.cpu()
-                        + np.sqrt(dt_sidechain_tor)
-                        * sidechain_tor_sigma
+                    sidechain_tor_drift = dt_sidechain_tor * sidechain_tor_score.cpu()
+                    sidechain_tor_noise = (
+                        np.sqrt(dt_sidechain_tor)
+                        * sidechain_tor_sigma_eff
                         * sidechain_tor_z
+                    )
+                    sidechain_tor_perturb = (
+                        sidechain_tor_drift + sidechain_tor_noise
                     ).numpy()
+
+                    if debug_sidechain:
+                        sc_tor_drift_norms.append(
+                            sidechain_tor_drift.abs().mean().item()
+                        )
+                        sc_tor_noise_norms.append(
+                            sidechain_tor_noise.abs().mean().item()
+                        )
 
             else:
                 dt_sidechain_tor = (
@@ -733,10 +816,17 @@ def sampling(
                         )
                     )
                 )
+                sidechain_tor_g_eff = sidechain_tor_g
+                if (
+                    sc_tor_sigma_mode == "predicted"
+                    and sc_tor_edge_scale_all is not None
+                ):
+                    sidechain_tor_g_eff = sidechain_tor_g * sc_tor_edge_scale_all
+
                 if ode:
                     sidechain_tor_perturb = (
                         0.5
-                        * sidechain_tor_g**2
+                        * sidechain_tor_g_eff**2
                         * dt_sidechain_tor
                         * sidechain_tor_score.cpu()
                     ).numpy()
@@ -749,12 +839,27 @@ def sampling(
                         sidechain_tor_z = torch.normal(
                             mean=0, std=1, size=sidechain_tor_score.shape
                         )
-                    sidechain_tor_perturb = (
-                        sidechain_tor_g**2
+                    sidechain_tor_drift = (
+                        sidechain_tor_g_eff**2
                         * dt_sidechain_tor
                         * sidechain_tor_score.cpu()
-                        + sidechain_tor_g * np.sqrt(dt_sidechain_tor) * sidechain_tor_z
+                    )
+                    sidechain_tor_noise = (
+                        sidechain_tor_g_eff
+                        * np.sqrt(dt_sidechain_tor)
+                        * sidechain_tor_z
+                    )
+                    sidechain_tor_perturb = (
+                        sidechain_tor_drift + sidechain_tor_noise
                     ).numpy()
+
+                    if debug_sidechain:
+                        sc_tor_drift_norms.append(
+                            sidechain_tor_drift.abs().mean().item()
+                        )
+                        sc_tor_noise_norms.append(
+                            sidechain_tor_noise.abs().mean().item()
+                        )
 
             sidechain_torsions_per_molecule = sidechain_tor_perturb.shape[0] // N
         else:
@@ -799,29 +904,9 @@ def sampling(
 
                     bb_tr_sigma_eff = bb_tr_sigma
                     bb_rot_sigma_eff = bb_rot_sigma
-                    if (
-                        bb_sigma_mode == "predicted"
-                        and residue_rmsd_pred is not None
-                        and hasattr(complex_graph_batch["receptor"], "nearby_residues")
-                    ):
-                        nearby_mask = complex_graph_batch["receptor"].nearby_residues
-                        if nearby_mask.dtype != torch.bool:
-                            nearby_mask = nearby_mask > 0
-                        flex_signal = residue_rmsd_pred.new_zeros(residue_rmsd_pred.shape)
-                        flex_signal[nearby_mask] = torch.clamp(
-                            residue_rmsd_pred[nearby_mask], min=0.0
-                        )
-                        if flex_signal.numel() > 0:
-                            power = max(float(bb_sigma_power), 1e-6)
-                            ref = max(float(bb_sigma_ref_rmsd), 1e-6)
-                            scale = torch.pow(flex_signal / ref, power)
-                            scale = torch.clamp(
-                                scale,
-                                min=float(bb_sigma_min_scale),
-                                max=float(bb_sigma_max_scale),
-                            )
-                            bb_tr_sigma_eff = bb_tr_sigma * scale.unsqueeze(-1)
-                            bb_rot_sigma_eff = bb_rot_sigma * scale.unsqueeze(-1)
+                    if bb_sigma_mode == "predicted" and bb_scale_all is not None:
+                        bb_tr_sigma_eff = bb_tr_sigma * bb_scale_all.unsqueeze(-1)
+                        bb_rot_sigma_eff = bb_rot_sigma * bb_scale_all.unsqueeze(-1)
 
                     bb_tr_perturb = (
                         bb_tr_drift * dt_bb_tr
@@ -997,6 +1082,22 @@ def sampling(
             confidence = torch.cat(confidence, dim=0)
         else:
             confidence = None
+    if debug_sidechain and (sc_tor_drift_norms or sc_tor_noise_norms):
+        def _summ_sc(name, drift_vals, noise_vals):
+            drift_vals = np.array(drift_vals)
+            noise_vals = np.array(noise_vals)
+            ratio = drift_vals / (noise_vals + 1e-10)
+            logging.info(
+                f"[Sidechain torsion drift vs noise summary] {name}: "
+                f"drift_mean={drift_vals.mean():.6f}, drift_std={drift_vals.std():.6f}; "
+                f"noise_mean={noise_vals.mean():.6f}, noise_std={noise_vals.std():.6f}; "
+                f"ratio_mean={ratio.mean():.3f}, ratio_std={ratio.std():.3f}, "
+                f"ratio_min={ratio.min():.3f}, ratio_max={ratio.max():.3f}, "
+                f"ratio_median={np.median(ratio):.3f}"
+            )
+
+        _summ_sc("sc_tor", sc_tor_drift_norms, sc_tor_noise_norms)
+
     if return_full_trajectory:
         return data_list, confidence, trajectory, sidechain_trajectory
     return data_list, confidence

@@ -68,6 +68,7 @@ class TensorProductScoreModel(torch.nn.Module):
         atom_max_neighbors: Optional[int] = None,
         sidechain_tor_bridge: bool = False,
         use_bb_orientation_feats: bool = False,
+        use_bb_sigma_scale_feat: bool = False,
         only_nearby_residues_atomic: bool = False,
         new_confidence_version: bool = False,
         atom_lig_confidence: bool = False,
@@ -115,6 +116,7 @@ class TensorProductScoreModel(torch.nn.Module):
         self.atom_max_neighbors = atom_max_neighbors
         self.sidechain_tor_bridge = sidechain_tor_bridge
         self.use_bb_orientation_feats = use_bb_orientation_feats
+        self.use_bb_sigma_scale_feat = use_bb_sigma_scale_feat
         self.only_nearby_residues_atomic = only_nearby_residues_atomic
         self.new_confidence_version = new_confidence_version
         self.atom_lig_confidence = atom_lig_confidence
@@ -381,14 +383,17 @@ class TensorProductScoreModel(torch.nn.Module):
                     internal_weights=True,
                     shared_weights=True,
                 )
+                bb_final_input_dim = 1 + sigma_embed_dim
+                if self.use_bb_sigma_scale_feat:
+                    bb_final_input_dim += 1
                 self.bb_tr_final_layer = nn.Sequential(
-                    nn.Linear(1 + sigma_embed_dim, ns),
+                    nn.Linear(bb_final_input_dim, ns),
                     nn.Dropout(dropout),
                     self.activation,
                     nn.Linear(ns, 1),
                 )
                 self.bb_rot_final_layer = nn.Sequential(
-                    nn.Linear(1 + sigma_embed_dim, ns),
+                    nn.Linear(bb_final_input_dim, ns),
                     nn.Dropout(dropout),
                     self.activation,
                     nn.Linear(ns, 1),
@@ -961,21 +966,43 @@ class TensorProductScoreModel(torch.nn.Module):
             bb_rot_pred = bb_pred[:, 3:6] + bb_pred[:, 9:]
 
             bb_tr_norm = clamped_norm(bb_tr_pred, dim=1, min=1e-6).unsqueeze(1)
+            bb_rot_norm = clamped_norm(bb_rot_pred, dim=1, min=1e-6).unsqueeze(1)
+
+            if self.use_bb_sigma_scale_feat and hasattr(
+                data["receptor"], "bb_sigma_scale"
+            ):
+                bb_sigma_scale = (
+                    data["receptor"]
+                    .bb_sigma_scale.to(rec_node_attr.device)
+                    .unsqueeze(-1)
+                    .float()
+                )
+                bb_tr_final_input = torch.cat(
+                    [bb_tr_norm, data["receptor"].node_sigma_emb, bb_sigma_scale],
+                    dim=1,
+                )
+                bb_rot_final_input = torch.cat(
+                    [bb_rot_norm, data["receptor"].node_sigma_emb, bb_sigma_scale],
+                    dim=1,
+                )
+            else:
+                bb_tr_final_input = torch.cat(
+                    [bb_tr_norm, data["receptor"].node_sigma_emb], dim=1
+                )
+                bb_rot_final_input = torch.cat(
+                    [bb_rot_norm, data["receptor"].node_sigma_emb], dim=1
+                )
+
             bb_tr_pred = (
                 bb_tr_pred
                 / bb_tr_norm
-                * self.bb_tr_final_layer(
-                    torch.cat([bb_tr_norm, data["receptor"].node_sigma_emb], dim=1)
-                )
+                * self.bb_tr_final_layer(bb_tr_final_input)
             )
 
-            bb_rot_norm = clamped_norm(bb_rot_pred, dim=1, min=1e-6).unsqueeze(1)
             bb_rot_pred = (
                 bb_rot_pred
                 / bb_rot_norm
-                * self.bb_rot_final_layer(
-                    torch.cat([bb_rot_norm, data["receptor"].node_sigma_emb], dim=1)
-                )
+                * self.bb_rot_final_layer(bb_rot_final_input)
             )
         else:
             bb_tr_pred = bb_rot_pred = torch.empty(0, device=tr_pred.device)

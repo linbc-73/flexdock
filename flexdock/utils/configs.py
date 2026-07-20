@@ -42,9 +42,11 @@ class DockingModelConfig:
     atom_max_neighbors: int = 12
     sidechain_tor_bridge: bool = True
     use_bb_orientation_feats: bool = False
+    use_bb_sigma_scale_feat: bool = False
     only_nearby_residues_atomic: bool = True
     activation_func: str = "ReLU"
     clamped_norm_min: float = 0.0
+    bb_bridge_drift_clip: Optional[float] = None
     no_batch_norm: bool = False
 
     # norm layer in TensorProductConvLayer

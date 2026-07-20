@@ -4,7 +4,8 @@ Evaluate residue RMSD predictions exported by scripts/predict_residue_rmsd.py.
 
 Expected CSV columns:
   - complex_name
-  - batch_residue_idx
+  - chain_id
+  - residue_id
   - predicted_rmsd
   - target_rmsd
 
@@ -91,7 +92,7 @@ def main() -> None:
 
     df = pd.read_csv(csv_path)
 
-    required = {"complex_name", "batch_residue_idx", "predicted_rmsd", "target_rmsd"}
+    required = {"complex_name", "chain_id", "residue_id", "predicted_rmsd", "target_rmsd"}
     missing = required.difference(df.columns)
     if missing:
         raise ValueError(f"Missing required columns: {sorted(missing)}")

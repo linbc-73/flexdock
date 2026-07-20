@@ -103,6 +103,22 @@ class PocketTransform(BaseTransform):
         ]
         data["receptor"].rot_vec = data["receptor"].rot_vec[res_pocket_mask]
 
+        # Subset per-residue attributes that may have been pre-computed or
+        # stored during preprocessing (flexibility signals and residue IDs).
+        for attr in (
+            "residue_rmsd_pred",
+            "residue_rmsd",
+            "rmsd_res",
+            "chain_idx",
+            "residue_number",
+        ):
+            if hasattr(data["receptor"], attr):
+                setattr(
+                    data["receptor"],
+                    attr,
+                    getattr(data["receptor"], attr)[res_pocket_mask],
+                )
+
         # Gather pocket atom attributes
         data["atom"].x = data["atom"].x[atom_pocket_mask]
         data["atom"].vdw_radii = data["atom"].vdw_radii[atom_pocket_mask]

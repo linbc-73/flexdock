@@ -202,6 +202,28 @@ class Featurizer:
                 lens_receptors
             ).long()
 
+            # Store residue-level chain/residue identifiers so downstream
+            # scripts can report predictions with real PDB names instead of
+            # arbitrary batch indices.
+            chain_to_idx = {}
+            chain_letters = []
+            chain_indices = []
+            residue_numbers = []
+            for res in apo_rec_struct.residues:
+                chain = getattr(res, "chain", "")
+                if chain not in chain_to_idx:
+                    chain_to_idx[chain] = len(chain_letters)
+                    chain_letters.append(chain)
+                chain_indices.append(chain_to_idx[chain])
+                residue_numbers.append(int(getattr(res, "number", res.idx + 1)))
+            complex_graph["receptor"].chain_idx = torch.tensor(
+                chain_indices, dtype=torch.long
+            )
+            complex_graph["receptor"].residue_number = torch.tensor(
+                residue_numbers, dtype=torch.long
+            )
+            complex_graph.chain_letters = chain_letters
+
             if holo_rec_struct is not None:
                 if self.cfg.flexible_backbone or self.cfg.flexible_sidechains:
                     # Rigid body alignment of apo and holo structures

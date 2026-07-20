@@ -112,6 +112,7 @@ def get_model(
             "atom_max_neighbors": args.atom_max_neighbors,
             "sidechain_tor_bridge": args.sidechain_tor_bridge,
             "use_bb_orientation_feats": args.use_bb_orientation_feats,
+            "use_bb_sigma_scale_feat": getattr(args, "use_bb_sigma_scale_feat", False),
             "only_nearby_residues_atomic": args.only_nearby_residues_atomic,
             "activation_func": args.activation_func,
             "norm_affine": args.norm_affine,

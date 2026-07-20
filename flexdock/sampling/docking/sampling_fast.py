@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import logging
 from torch_geometric.data import Batch, HeteroData
 from torch_geometric.loader import DataLoader
 from scipy.spatial.transform import Rotation as R
@@ -12,7 +13,11 @@ from flexdock.data.conformers.modify import (
 )
 from flexdock.data.feature.helpers import rotate_backbone_torch, to_atom_grid_torch
 from flexdock.geometry.ops import axis_angle_to_matrix
-from flexdock.sampling.docking.diffusion import set_time
+from flexdock.sampling.docking.diffusion import (
+    set_time,
+    compute_residue_flexibility_scale,
+    map_residue_scale_to_rotatable_edges,
+)
 
 
 def randomize_position_inf(
@@ -159,6 +164,11 @@ def sampling(
     bb_sigma_power: float = 1.0,
     bb_sigma_min_scale: float = 0.5,
     bb_sigma_max_scale: float = 2.0,
+    sc_tor_sigma_mode: str = "fixed",
+    sc_tor_sigma_ref_rmsd: float = 2.0,
+    sc_tor_sigma_power: float = 1.0,
+    sc_tor_sigma_min_scale: float = 0.5,
+    sc_tor_sigma_max_scale: float = 2.0,
 ):
     N = len(data_list)
     trajectory = []
@@ -178,6 +188,16 @@ def sampling(
     all_atoms = hasattr(model_args, "all_atoms") and model_args.all_atoms
 
     final_data_list = []
+
+    # Statistics for quantifying drift vs noise dominance (only populated when debug_backbone=True)
+    bb_tr_drift_norms = []
+    bb_tr_noise_norms = []
+    bb_rot_drift_norms = []
+    bb_rot_noise_norms = []
+
+    # Statistics for sidechain torsion drift vs noise (only populated when debug_sidechain=True)
+    sc_tor_drift_norms = []
+    sc_tor_noise_norms = []
 
     # Run diffusion and flow
     for complex_graph_batch in loader:
@@ -452,6 +472,33 @@ def sampling(
                         else 1 - sc_tor_schedule[t_idx]
                     )
 
+                    sidechain_tor_sigma_eff = sidechain_tor_sigma
+                    if (
+                        sc_tor_sigma_mode == "predicted"
+                        and residue_rmsd_pred is not None
+                        and residue_rmsd_pred.numel() > 0
+                        and hasattr(complex_graph_batch["receptor"], "nearby_residues")
+                        and hasattr(
+                            complex_graph_batch["atom", "atom_bond", "atom"],
+                            "res_to_rotate",
+                        )
+                    ):
+                        scale = compute_residue_flexibility_scale(
+                            residue_rmsd_pred,
+                            complex_graph_batch["receptor"].nearby_residues,
+                            ref_rmsd=sc_tor_sigma_ref_rmsd,
+                            power=sc_tor_sigma_power,
+                            min_scale=sc_tor_sigma_min_scale,
+                            max_scale=sc_tor_sigma_max_scale,
+                        )
+                        edge_scale = map_residue_scale_to_rotatable_edges(
+                            scale, complex_graph_batch
+                        )
+                        if edge_scale is not None:
+                            sidechain_tor_sigma_eff = (
+                                sidechain_tor_sigma * edge_scale
+                            )
+
                     if ode:
                         sidechain_tor_perturb = dt_sidechain_tor * sidechain_tor_score
                     else:
@@ -471,9 +518,22 @@ def sampling(
                         sidechain_tor_perturb = (
                             dt_sidechain_tor * sidechain_tor_score
                             + np.sqrt(dt_sidechain_tor)
-                            * sidechain_tor_sigma
+                            * sidechain_tor_sigma_eff
                             * sidechain_tor_z
                         )
+
+                    if debug_sidechain:
+                        with torch.no_grad():
+                            drift_sc = (
+                                dt_sidechain_tor * sidechain_tor_score
+                            ).abs()
+                            noise_sc = (
+                                np.sqrt(dt_sidechain_tor)
+                                * sidechain_tor_sigma_eff
+                                * sidechain_tor_z
+                            ).abs()
+                            sc_tor_drift_norms.append(drift_sc.mean().cpu().item())
+                            sc_tor_noise_norms.append(noise_sc.mean().cpu().item())
 
                 else:
                     raise ValueError(
@@ -535,26 +595,19 @@ def sampling(
                     if (
                         bb_sigma_mode == "predicted"
                         and residue_rmsd_pred is not None
+                        and residue_rmsd_pred.numel() > 0
                         and hasattr(complex_graph_batch["receptor"], "nearby_residues")
                     ):
-                        nearby_mask = complex_graph_batch["receptor"].nearby_residues
-                        if nearby_mask.dtype != torch.bool:
-                            nearby_mask = nearby_mask > 0
-                        flex_signal = residue_rmsd_pred.new_zeros(residue_rmsd_pred.shape)
-                        flex_signal[nearby_mask] = torch.clamp(
-                            residue_rmsd_pred[nearby_mask], min=0.0
+                        scale = compute_residue_flexibility_scale(
+                            residue_rmsd_pred,
+                            complex_graph_batch["receptor"].nearby_residues,
+                            ref_rmsd=bb_sigma_ref_rmsd,
+                            power=bb_sigma_power,
+                            min_scale=bb_sigma_min_scale,
+                            max_scale=bb_sigma_max_scale,
                         )
-                        if flex_signal.numel() > 0:
-                            power = max(float(bb_sigma_power), 1e-6)
-                            ref = max(float(bb_sigma_ref_rmsd), 1e-6)
-                            scale = torch.pow(flex_signal / ref, power)
-                            scale = torch.clamp(
-                                scale,
-                                min=float(bb_sigma_min_scale),
-                                max=float(bb_sigma_max_scale),
-                            )
-                            bb_tr_sigma_eff = bb_tr_sigma * scale.unsqueeze(-1)
-                            bb_rot_sigma_eff = bb_rot_sigma * scale.unsqueeze(-1)
+                        bb_tr_sigma_eff = bb_tr_sigma * scale.unsqueeze(-1)
+                        bb_rot_sigma_eff = bb_rot_sigma * scale.unsqueeze(-1)
 
                     bb_tr_perturb = (
                         bb_tr_drift * dt_bb_tr
@@ -564,6 +617,24 @@ def sampling(
                         bb_rot_drift * dt_bb_rot
                         + bb_rot_z * np.sqrt(dt_bb_rot) * bb_rot_sigma_eff
                     )
+
+                if debug_backbone:
+                    # Quantify drift vs noise dominance for backbone.
+                    # Per-residue L2 norms, averaged over the batch.
+                    with torch.no_grad():
+                        drift_tr = (bb_tr_drift * dt_bb_tr).norm(dim=-1)
+                        noise_tr = (
+                            bb_tr_z * np.sqrt(dt_bb_tr) * bb_tr_sigma_eff
+                        ).norm(dim=-1)
+                        bb_tr_drift_norms.append(drift_tr.mean().cpu().item())
+                        bb_tr_noise_norms.append(noise_tr.mean().cpu().item())
+
+                        drift_rot = (bb_rot_drift * dt_bb_rot).norm(dim=-1)
+                        noise_rot = (
+                            bb_rot_z * np.sqrt(dt_bb_rot) * bb_rot_sigma_eff
+                        ).norm(dim=-1)
+                        bb_rot_drift_norms.append(drift_rot.mean().cpu().item())
+                        bb_rot_noise_norms.append(noise_rot.mean().cpu().item())
 
                 new_pos, _ = rotate_backbone_torch(
                     atoms=complex_graph_batch["atom"].pos,
@@ -690,4 +761,38 @@ def sampling(
 
     if return_full_trajectory:
         return final_data_list, confidence, trajectory, sidechain_trajectory
+
+    if debug_backbone and (bb_tr_drift_norms or bb_rot_drift_norms):
+        def _summ(name, drift_vals, noise_vals):
+            drift_vals = np.array(drift_vals)
+            noise_vals = np.array(noise_vals)
+            ratio = drift_vals / (noise_vals + 1e-10)
+            logging.info(
+                f"[Backbone drift vs noise summary] {name}: "
+                f"drift_mean={drift_vals.mean():.6f}, drift_std={drift_vals.std():.6f}; "
+                f"noise_mean={noise_vals.mean():.6f}, noise_std={noise_vals.std():.6f}; "
+                f"ratio_mean={ratio.mean():.3f}, ratio_std={ratio.std():.3f}, "
+                f"ratio_min={ratio.min():.3f}, ratio_max={ratio.max():.3f}, "
+                f"ratio_median={np.median(ratio):.3f}"
+            )
+
+        _summ("bb_tr", bb_tr_drift_norms, bb_tr_noise_norms)
+        _summ("bb_rot", bb_rot_drift_norms, bb_rot_noise_norms)
+
+    if debug_sidechain and (sc_tor_drift_norms or sc_tor_noise_norms):
+        def _summ_sc(name, drift_vals, noise_vals):
+            drift_vals = np.array(drift_vals)
+            noise_vals = np.array(noise_vals)
+            ratio = drift_vals / (noise_vals + 1e-10)
+            logging.info(
+                f"[Sidechain torsion drift vs noise summary] {name}: "
+                f"drift_mean={drift_vals.mean():.6f}, drift_std={drift_vals.std():.6f}; "
+                f"noise_mean={noise_vals.mean():.6f}, noise_std={noise_vals.std():.6f}; "
+                f"ratio_mean={ratio.mean():.3f}, ratio_std={ratio.std():.3f}, "
+                f"ratio_min={ratio.min():.3f}, ratio_max={ratio.max():.3f}, "
+                f"ratio_median={np.median(ratio):.3f}"
+            )
+
+        _summ_sc("sc_tor", sc_tor_drift_norms, sc_tor_noise_norms)
+
     return final_data_list, confidence

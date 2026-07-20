@@ -169,6 +169,38 @@ def parse_args():
         help="Maximum scaling factor applied to bb sigma in predicted mode.",
     )
 
+    parser.add_argument(
+        "--sc_tor_sigma_mode",
+        type=str,
+        default="fixed",
+        choices=["fixed", "predicted"],
+        help="Sidechain torsion sigma strategy: fixed uses config sigma; predicted scales sigma by residue RMSD predictions.",
+    )
+    parser.add_argument(
+        "--sc_tor_sigma_ref_rmsd",
+        type=float,
+        default=2.0,
+        help="Reference residue RMSD used to normalize predicted flexibility for sidechain torsions.",
+    )
+    parser.add_argument(
+        "--sc_tor_sigma_power",
+        type=float,
+        default=1.0,
+        help="Exponent applied to normalized predicted flexibility before clipping for sidechain torsions.",
+    )
+    parser.add_argument(
+        "--sc_tor_sigma_min_scale",
+        type=float,
+        default=0.5,
+        help="Minimum scaling factor applied to sc_tor sigma in predicted mode.",
+    )
+    parser.add_argument(
+        "--sc_tor_sigma_max_scale",
+        type=float,
+        default=2.0,
+        help="Maximum scaling factor applied to sc_tor sigma in predicted mode.",
+    )
+
     parser.add_argument("--initial_noise_std_proportion", type=float, default=1.0)
     parser.add_argument("--use_fast_sampling", action="store_true")
 
