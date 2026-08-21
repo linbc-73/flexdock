@@ -229,6 +229,10 @@ class InferenceModule(LightningModule):
                 bb_sigma_power=getattr(self.cfg, "bb_sigma_power", 1.0),
                 bb_sigma_min_scale=getattr(self.cfg, "bb_sigma_min_scale", 0.5),
                 bb_sigma_max_scale=getattr(self.cfg, "bb_sigma_max_scale", 2.0),
+                sc_sigma_mode=getattr(self.cfg, "sc_sigma_mode", "fixed"),
+                class_sigma_scales=tuple(
+                    getattr(self.cfg, "class_sigma_scales", [0.5, 1.0, 2.0])
+                ),
             )
         except Exception as e:
             logging.error(

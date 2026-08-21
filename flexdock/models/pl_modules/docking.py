@@ -227,6 +227,21 @@ class FlexDockModule(pl.LightningModule):
                     debug_backbone=False,
                     debug_sidechain=False,
                     use_bb_orientation_feats=self.model_cfg.use_bb_orientation_feats,
+                    bb_sigma_mode=getattr(self.sampler_cfg, "bb_sigma_mode", "fixed"),
+                    bb_sigma_ref_rmsd=getattr(
+                        self.sampler_cfg, "bb_sigma_ref_rmsd", 2.0
+                    ),
+                    bb_sigma_power=getattr(self.sampler_cfg, "bb_sigma_power", 1.0),
+                    bb_sigma_min_scale=getattr(
+                        self.sampler_cfg, "bb_sigma_min_scale", 0.5
+                    ),
+                    bb_sigma_max_scale=getattr(
+                        self.sampler_cfg, "bb_sigma_max_scale", 2.0
+                    ),
+                    sc_sigma_mode=getattr(self.sampler_cfg, "sc_sigma_mode", "fixed"),
+                    class_sigma_scales=tuple(
+                        getattr(self.sampler_cfg, "class_sigma_scales", [0.5, 1.0, 2.0])
+                    ),
                 )
             except Exception as e:
                 if "failed to converge" in str(e):

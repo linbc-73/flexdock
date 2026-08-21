@@ -117,6 +117,12 @@ def get_model(
             "norm_affine": args.norm_affine,
             "clamped_norm_min": args.clamped_norm_min,
             "residue_rmsd_prediction": getattr(args, "residue_rmsd_prediction", False),
+            "residue_rmsd_classification": getattr(
+                args, "residue_rmsd_classification", False
+            ),
+            "residue_rmsd_bins": list(getattr(args, "residue_rmsd_bins", []))
+            if getattr(args, "residue_rmsd_classification", False)
+            else None,
         }
 
         if args.all_atoms:

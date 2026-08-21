@@ -6,7 +6,9 @@ import torch
 from omegaconf import OmegaConf
 
 from flexdock.data.modules.inference import InferenceDataModule
+from flexdock.data.modules.cache_inference import CacheInferenceDataModule
 from flexdock.data.feature.featurizer import FeaturizerConfig
+from flexdock.data.transforms.docking import construct_transform
 from flexdock.data.write.writer import FlexDockWriter
 from flexdock.models.pl_modules.inference import InferenceModule
 from flexdock.utils.configs import config_from_args
@@ -19,7 +21,13 @@ def parse_args():
         "--input_csv",
         default=None,
         type=str,
-        help="Csv file containing protein paths and ligand SMILES",
+        help="Csv file containing protein paths and ligand SMILES (or pdbid column when --cache_path is used)",
+    )
+    parser.add_argument(
+        "--cache_path",
+        default=None,
+        type=str,
+        help="If provided, load preprocessed heterograph .pt files from this cache directory instead of featurizing from raw inputs",
     )
     parser.add_argument(
         "--esm_embeddings_path", default=None, help="Path to ESM Embeddings"
@@ -140,8 +148,8 @@ def parse_args():
         "--bb_sigma_mode",
         type=str,
         default="fixed",
-        choices=["fixed", "predicted"],
-        help="Backbone sigma strategy: fixed uses config sigma; predicted scales sigma by residue RMSD predictions.",
+        choices=["fixed", "predicted", "class"],
+        help="Backbone sigma strategy: fixed uses config sigma; predicted scales sigma by residue RMSD predictions; class uses discrete flexibility class predictions.",
     )
     parser.add_argument(
         "--bb_sigma_ref_rmsd",
@@ -166,6 +174,22 @@ def parse_args():
         type=float,
         default=2.0,
         help="Maximum scaling factor applied to bb sigma in predicted mode.",
+    )
+
+    parser.add_argument(
+        "--sc_sigma_mode",
+        type=str,
+        default="fixed",
+        choices=["fixed", "predicted", "class"],
+        help="Sidechain sigma strategy: fixed uses config sigma; predicted scales sigma by residue RMSD predictions; class uses discrete flexibility class predictions.",
+    )
+
+    parser.add_argument(
+        "--class_sigma_scales",
+        type=float,
+        nargs=3,
+        default=[0.5, 1.0, 2.0],
+        help="Sigma multipliers for flexibility classes 0, 1, 2 (used when bb_sigma_mode or sc_sigma_mode is 'class').",
     )
 
     parser.add_argument("--initial_noise_std_proportion", type=float, default=1.0)
@@ -339,18 +363,6 @@ def predict():
         flexible_sidechains=args.flexible_sidechains,
     )
 
-    # Setup InferenceDataModule
-    datamodule = InferenceDataModule(
-        input_csv=args.input_csv,
-        featurizer_cfg=featurizer_cfg,
-        limit_complexes=args.limit_complexes,
-        esm_embeddings_path=args.esm_embeddings_path,
-        pocket_reduction=args.pocket_reduction,
-        pocket_buffer=args.pocket_buffer,
-        pocket_min_size=args.pocket_min_size,
-        only_nearby_residues_atomic=args.only_nearby_residues_atomic,
-    )
-
     # Gather checkpoint files and configs
     checkpoints, configs = prepare_ckpt_and_args(args)
 
@@ -374,9 +386,71 @@ def predict():
                     "sigma": docking_cfg.sigma,
                 }
             )
+        elif "sigma" not in sampler_cfg:
+            # Newer configs store sigma fields under a top-level ``sigma`` section,
+            # while the sampler section itself may contain them flattened. Make sure
+            # the sampler config exposes the ``sigma`` sub-dict expected by the
+            # sampling functions.
+            sigma_keys = [
+                "tr_sigma_max",
+                "tr_sigma_min",
+                "rot_sigma_max",
+                "rot_sigma_min",
+                "tor_sigma_max",
+                "tor_sigma_min",
+                "bb_tr_sigma",
+                "bb_rot_sigma",
+                "sidechain_tor_sigma",
+            ]
+            sigma_dict = {k: sampler_cfg[k] for k in sigma_keys if k in sampler_cfg}
+            if sigma_dict:
+                sampler_cfg.sigma = OmegaConf.create(sigma_dict)
+            elif "sigma" in docking_cfg:
+                sampler_cfg.sigma = docking_cfg.sigma
+            elif "transforms" in docking_cfg and "sigma_args" in docking_cfg.transforms:
+                sampler_cfg.sigma = docking_cfg.transforms.sigma_args
+            else:
+                raise ValueError(
+                    "Could not locate sigma configuration for inference. "
+                    "Expected one of: sampler.sigma, a top-level 'sigma' block, "
+                    "or flattened sigma fields in the sampler config."
+                )
         sampler_cfg.inference_steps = args.inference_steps
     else:
         sampler_cfg = None
+
+    # Setup InferenceDataModule. When using a preprocessed cache we need the
+    # docking config (loaded above) to build the inference transform.
+    if args.cache_path is not None:
+        # Load preprocessed heterographs from cache. The input_csv must contain
+        # a 'pdbid' column used to locate heterograph-{pdbid}.pt files.
+        inference_transform = construct_transform(
+            cfg=docking_cfg.transforms,
+            mode="inference",
+            task="docking",
+        )
+        datamodule = CacheInferenceDataModule(
+            input_csv=args.input_csv,
+            cache_path=args.cache_path,
+            transform=inference_transform,
+            limit_complexes=args.limit_complexes,
+            pocket_reduction=args.pocket_reduction,
+            pocket_buffer=args.pocket_buffer,
+            pocket_min_size=args.pocket_min_size,
+            only_nearby_residues_atomic=args.only_nearby_residues_atomic,
+            batch_size=args.batch_size,
+        )
+    else:
+        datamodule = InferenceDataModule(
+            input_csv=args.input_csv,
+            featurizer_cfg=featurizer_cfg,
+            limit_complexes=args.limit_complexes,
+            esm_embeddings_path=args.esm_embeddings_path,
+            pocket_reduction=args.pocket_reduction,
+            pocket_buffer=args.pocket_buffer,
+            pocket_min_size=args.pocket_min_size,
+            only_nearby_residues_atomic=args.only_nearby_residues_atomic,
+        )
 
     # Setup inference module
     model_module = InferenceModule(

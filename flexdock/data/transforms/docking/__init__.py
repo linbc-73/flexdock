@@ -130,6 +130,16 @@ class SetZeroTimeTransform(BaseTransform):
 
 def construct_transform(cfg, mode="train", task="docking"):
     is_residue_rmsd = task == "residue_rmsd"
+    is_residue_rmsd_classification = is_residue_rmsd and cfg.get(
+        "residue_rmsd_classification", False
+    )
+    residue_rmsd_bins = cfg.get("residue_rmsd_bins", None)
+    flexibility_metric = cfg.get("flexibility_metric", "residue_rmsd")
+
+    bb_sigma_mode = cfg.get("protein", {}).get("bb_sigma_mode", "fixed")
+    sc_sigma_mode = cfg.get("protein", {}).get("sc_sigma_mode", "fixed")
+    use_class_sigma = bb_sigma_mode == "class" or sc_sigma_mode == "class"
+
     transforms = []
 
     if is_residue_rmsd:
@@ -146,8 +156,11 @@ def construct_transform(cfg, mode="train", task="docking"):
     transforms.append(pocket_transform)
 
     if mode in ["train", "val"] and not is_residue_rmsd:
+        # DIAGNOSTIC: apply the same backbone-RMSD filter to validation as to
+        # training. This checks whether the validation loss explosions are caused
+        # by the train/val filtering asymmetry.
         unbalanced_transform = UnbalancedTransform(
-            match_max_rmsd=cfg.unbalanced.match_max_rmsd if mode == "train" else None,
+            match_max_rmsd=cfg.unbalanced.match_max_rmsd,
             fast_updates=cfg.fast_updates,
         )
         transforms.append(unbalanced_transform)
@@ -162,9 +175,28 @@ def construct_transform(cfg, mode="train", task="docking"):
 
     if mode in ["train", "val"]:
         if is_residue_rmsd:
-            transforms.append(ResidueRMSDTargetTransform())
+            transforms.append(
+                ResidueRMSDTargetTransform(
+                    classification=is_residue_rmsd_classification,
+                    bins=residue_rmsd_bins,
+                    metric=flexibility_metric,
+                )
+            )
             transforms.append(SetZeroTimeTransform(all_atoms=cfg.pocket.all_atoms))
         else:
+            if use_class_sigma:
+                assert residue_rmsd_bins is not None, (
+                    "residue_rmsd_bins must be provided when using "
+                    "bb_sigma_mode='class' or sc_sigma_mode='class'"
+                )
+                transforms.append(
+                    ResidueRMSDTargetTransform(
+                        classification=True,
+                        bins=residue_rmsd_bins,
+                        set_positions=False,
+                        metric=flexibility_metric,
+                    )
+                )
             time_config = TimeConfig(
                 sampling_alpha=cfg.time_args.sampling_alpha,
                 sampling_beta=cfg.time_args.sampling_beta,
@@ -209,6 +241,8 @@ def construct_transform(cfg, mode="train", task="docking"):
                 bb_sigma_power=cfg.protein.get("bb_sigma_power", 1.0),
                 bb_sigma_min_scale=cfg.protein.get("bb_sigma_min_scale", 0.5),
                 bb_sigma_max_scale=cfg.protein.get("bb_sigma_max_scale", 2.0),
+                sc_sigma_mode=cfg.protein.get("sc_sigma_mode", "fixed"),
+                class_sigma_scales=cfg.protein.get("class_sigma_scales", [0.5, 1.0, 2.0]),
             )
 
             docking_transform = DockingTransform(

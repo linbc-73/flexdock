@@ -20,6 +20,7 @@ class FlexDockLoss(nn.Module):
             "bb_tr_loss": self.args.bb_tr_weight,
             "bb_rot_loss": self.args.bb_rot_weight,
             "sc_tor_loss": self.args.sc_tor_weight,
+            "residue_rmsd_loss": getattr(self.args, "residue_rmsd_weight", 0.0),
         }
 
     def forward(self, outputs, batch, apply_mean: bool = False):
@@ -55,6 +56,10 @@ class FlexDockLoss(nn.Module):
             outputs, batch, t_dict, sigma_dict, apply_mean=apply_mean
         )
 
+        residue_rmsd_loss = self.compute_residue_rmsd_loss(outputs, batch)
+        if residue_rmsd_loss is not None:
+            protein_losses["residue_rmsd_loss"] = residue_rmsd_loss
+
         for loss_name, value in ligand_losses.items():
             loss_dict[loss_name] = value.detach().clone()
 
@@ -74,6 +79,26 @@ class FlexDockLoss(nn.Module):
 
         loss_dict["loss"] = loss.detach().clone()
         return loss, loss_dict
+
+    def compute_residue_rmsd_loss(self, outputs, batch):
+        logits = outputs.get("residue_rmsd_class_logits")
+        if logits is None or logits.numel() == 0:
+            return None
+
+        if not hasattr(batch["receptor"], "residue_rmsd_class"):
+            return None
+
+        target = batch["receptor"].residue_rmsd_class.long()
+        mask = getattr(batch["receptor"], "nearby_residues", None)
+        if mask is not None:
+            if mask.dtype != torch.bool:
+                mask = mask > 0
+            if mask.sum() == 0:
+                return None
+            logits = logits[mask]
+            target = target[mask]
+
+        return torch.nn.functional.cross_entropy(logits, target)
 
     def compute_ligand_loss(
         self, outputs, batch, t_dict, sigma_dict, apply_mean: bool = False

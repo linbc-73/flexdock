@@ -75,6 +75,8 @@ class TensorProductScoreModel(torch.nn.Module):
         norm_affine: bool = True,
         clamped_norm_min: float = 1.0e-6,
         residue_rmsd_prediction: bool = False,
+        residue_rmsd_classification: bool = False,
+        residue_rmsd_bins: Optional[list] = None,
         **kwargs,
     ):
         super().__init__()
@@ -120,6 +122,8 @@ class TensorProductScoreModel(torch.nn.Module):
         self.atom_lig_confidence = atom_lig_confidence
         self.clamped_norm_min = clamped_norm_min
         self.residue_rmsd_prediction = residue_rmsd_prediction
+        self.residue_rmsd_classification = residue_rmsd_classification
+        self.residue_rmsd_bins = residue_rmsd_bins
 
         activation_func = (
             activation_func.lower()
@@ -396,12 +400,19 @@ class TensorProductScoreModel(torch.nn.Module):
 
             if residue_rmsd_prediction:
                 residue_rmsd_input = 2 * self.ns if num_conv_layers >= 3 else self.ns
+                if residue_rmsd_classification:
+                    assert residue_rmsd_bins is not None, "residue_rmsd_bins required for classification"
+                    residue_rmsd_output_dim = len(residue_rmsd_bins) + 1
+                    residue_rmsd_final_activation = nn.Identity()
+                else:
+                    residue_rmsd_output_dim = 1
+                    residue_rmsd_final_activation = nn.ReLU()
                 self.residue_rmsd_head = nn.Sequential(
                     nn.Linear(residue_rmsd_input, ns),
                     self.activation,
                     nn.Dropout(dropout),
-                    nn.Linear(ns, 1),
-                    nn.ReLU(),
+                    nn.Linear(ns, residue_rmsd_output_dim),
+                    residue_rmsd_final_activation,
                 )
         rank_zero_info(f"Unused arguments: {kwargs}")
 
@@ -988,9 +999,16 @@ class TensorProductScoreModel(torch.nn.Module):
                 if self.num_conv_layers >= 3
                 else rec_node_attr[:, : self.ns]
             )
-            residue_rmsd_pred = self.residue_rmsd_head(scalar_rec_attr).squeeze(-1)
+            residue_rmsd_out = self.residue_rmsd_head(scalar_rec_attr)
+            if self.residue_rmsd_classification:
+                residue_rmsd_class_logits = residue_rmsd_out
+                residue_rmsd_pred = torch.empty(0, device=tr_pred.device)
+            else:
+                residue_rmsd_class_logits = torch.empty(0, device=tr_pred.device)
+                residue_rmsd_pred = residue_rmsd_out.squeeze(-1)
         else:
             residue_rmsd_pred = torch.empty(0, device=tr_pred.device)
+            residue_rmsd_class_logits = torch.empty(0, device=tr_pred.device)
 
         outputs = {
             "tr_pred": tr_pred,
@@ -1000,6 +1018,7 @@ class TensorProductScoreModel(torch.nn.Module):
             "bb_rot_pred": bb_rot_pred,
             "sc_tor_pred": sc_tor_pred,
             "residue_rmsd_pred": residue_rmsd_pred,
+            "residue_rmsd_class_logits": residue_rmsd_class_logits,
         }
         return outputs
 

@@ -27,6 +27,7 @@ from lightning.pytorch.plugins.precision import FSDPPrecision
 from flexdock.data.parse.base import save_config
 from flexdock.data.modules.training import setup_training_datamodule
 from flexdock.models.pl_modules import setup_model
+from flexdock.models.pl_modules.residue_rmsd import compute_residue_rmsd_class_weights
 from flexdock.models.layers.tensor_product import TensorProductConvLayer
 from flexdock.utils.callbacks import setup_callbacks
 
@@ -99,6 +100,20 @@ def main(config_file, args):
     seed_everything(cfg.seed)
 
     data_module = setup_training_datamodule(data_cfg=cfg.data, transform_cfg=cfg.transforms)
+
+    # For residue RMSD classification, auto-compute class weights if requested.
+    if cfg.data.task == "residue_rmsd" and getattr(cfg.model, "residue_rmsd_classification", False):
+        loss_cfg = cfg.get("loss", OmegaConf.create({}))
+        class_weight = getattr(loss_cfg, "class_weight", None)
+        if class_weight in ("inverse", "sqrt_inverse"):
+            weight_list = compute_residue_rmsd_class_weights(
+                dataset=data_module._train_dataset,
+                weight_type=class_weight,
+                max_complexes=getattr(loss_cfg, "class_weight_max_complexes", 1000),
+                num_workers=getattr(cfg.data, "num_workers", 0),
+            )
+            cfg.loss.class_weight = weight_list
+
     model = setup_model(cfg, task=cfg.data.task)
 
     run_dir = os.path.join(cfg.log_dir, cfg.run_name)

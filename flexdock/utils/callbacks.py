@@ -187,6 +187,21 @@ def setup_callbacks(args, run_dir, task: str = "docking"):
 
 
 def setup_residue_rmsd_callbacks(args, run_dir):
+    callbacks = []
+
+    if getattr(args, "residue_rmsd_classification", False):
+        best_accuracy_checkpoint = ModelCheckpoint(
+            dirpath=run_dir,
+            filename="best_model_accuracy",
+            monitor="val_accuracy",
+            mode="max",
+            every_n_epochs=1,
+            save_on_train_epoch_end=True,
+            save_top_k=1,
+        )
+        best_accuracy_checkpoint.FILE_EXTENSION = ".pt"
+        callbacks.append(best_accuracy_checkpoint)
+
     best_model_checkpoint = ModelCheckpoint(
         dirpath=run_dir,
         filename="best_model",
@@ -197,7 +212,7 @@ def setup_residue_rmsd_callbacks(args, run_dir):
         save_top_k=1,
     )
     best_model_checkpoint.FILE_EXTENSION = ".pt"
-    callbacks = [best_model_checkpoint]
+    callbacks.append(best_model_checkpoint)
 
     last_model_checkpoint = ModelCheckpoint(
         dirpath=run_dir,

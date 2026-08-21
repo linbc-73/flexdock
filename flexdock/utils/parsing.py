@@ -436,6 +436,12 @@ def parse_docking_args(parser):
     parser.add_argument("--bb_tr_weight", type=float, default=0.17, help="")
     parser.add_argument("--bb_rot_weight", type=float, default=0.17, help="")
     parser.add_argument(
+        "--residue_rmsd_weight",
+        type=float,
+        default=0.0,
+        help="Weight of residue RMSD classification loss (used when model outputs residue_rmsd_class_logits)",
+    )
+    parser.add_argument(
         "--confidence_weight",
         type=float,
         default=0.33,
@@ -752,6 +758,39 @@ def parse_docking_args(parser):
     parser.add_argument("--bb_tr_bridge_alpha", type=float, default=0.01, help="")
     parser.add_argument("--bb_rot_bridge_alpha", type=float, default=0.01, help="")
     parser.add_argument("--sc_tor_bridge_alpha", type=float, default=0.01, help="")
+    parser.add_argument(
+        "--bb_sigma_mode",
+        type=str,
+        default="fixed",
+        choices=["fixed", "predicted", "class"],
+        help="How to set per-residue backbone sigma scaling: fixed, predicted (continuous RMSD), or class (discrete flexibility class)",
+    )
+    parser.add_argument(
+        "--sc_sigma_mode",
+        type=str,
+        default="fixed",
+        choices=["fixed", "class"],
+        help="How to set per-torsion sidechain sigma scaling: fixed or class (discrete flexibility class)",
+    )
+    parser.add_argument(
+        "--class_sigma_scales",
+        type=lambda s: [float(x) for x in s.split(",")],
+        default=[0.5, 1.0, 2.0],
+        help="Comma-separated sigma multipliers for flexibility classes 0,1,2 (used when bb_sigma_mode or sc_sigma_mode is 'class')",
+    )
+    parser.add_argument(
+        "--residue_rmsd_bins",
+        type=lambda s: [float(x) for x in s.split(",")],
+        default=None,
+        help="Bin edges for residue RMSD classification; required when using bb_sigma_mode='class' or sc_sigma_mode='class'",
+    )
+    parser.add_argument(
+        "--flexibility_metric",
+        type=str,
+        default="residue_rmsd",
+        choices=["residue_rmsd", "calpha_rmsd"],
+        help="Metric used to define flexibility classes: residue_rmsd (all heavy atoms) or calpha_rmsd (C-alpha only).",
+    )
     parser.add_argument(
         "--use_bb_orientation_feats", action="store_true", default=False, help=""
     )

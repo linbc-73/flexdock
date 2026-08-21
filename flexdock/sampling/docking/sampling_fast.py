@@ -15,6 +15,37 @@ from flexdock.geometry.ops import axis_angle_to_matrix
 from flexdock.sampling.docking.diffusion import set_time
 
 
+def _inject_external_residue_rmsd(outputs, data, class_sigma_scales):
+    """Allow external residue-RMSD predictions stored on the graph to drive
+    class/predicted sigma scaling when the docking model itself does not
+    produce these outputs.
+    """
+    outputs = dict(outputs)
+    device = data["receptor"].x.device
+
+    if outputs.get("residue_rmsd_class_logits") is None and hasattr(
+        data["receptor"], "residue_rmsd_class"
+    ):
+        classes = data["receptor"].residue_rmsd_class.long().to(device)
+        num_classes = len(class_sigma_scales)
+        classes = torch.clamp(classes, min=0, max=num_classes - 1)
+        logits = torch.full(
+            (classes.size(0), num_classes),
+            -10.0,
+            device=device,
+            dtype=torch.float32,
+        )
+        logits.scatter_(1, classes.unsqueeze(1), 10.0)
+        outputs["residue_rmsd_class_logits"] = logits
+
+    if outputs.get("residue_rmsd_pred") is None and hasattr(
+        data["receptor"], "residue_rmsd_pred"
+    ):
+        outputs["residue_rmsd_pred"] = data["receptor"].residue_rmsd_pred.to(device)
+
+    return outputs
+
+
 def randomize_position_inf(
     data_list: list[HeteroData],
     no_torsion: bool,
@@ -96,12 +127,16 @@ def randomize_position_inf(
 
         elif flexible_sidechains and sidechain_tor_bridge:
             for complex_graph in data_list:
-                sidechain_torsion_updates = np.concatenate(
-                    complex_graph.sc_conformer_match_rotations[0]
-                )
-                complex_graph["atom"].pos = modify_sidechains_old(
-                    complex_graph, complex_graph["atom"].pos, -sidechain_torsion_updates
-                )
+                # During inference there is no holo structure, so conformer-match
+                # rotations are not available. The input is already the apo
+                # structure, so no sidechain reversion is needed.
+                if hasattr(complex_graph, "sc_conformer_match_rotations"):
+                    sidechain_torsion_updates = np.concatenate(
+                        complex_graph.sc_conformer_match_rotations[0]
+                    )
+                    complex_graph["atom"].pos = modify_sidechains_old(
+                        complex_graph, complex_graph["atom"].pos, -sidechain_torsion_updates
+                    )
 
     for complex_graph in data_list:
         # set the center of the molecule to the center of the pocket atoms
@@ -159,6 +194,8 @@ def sampling(
     bb_sigma_power: float = 1.0,
     bb_sigma_min_scale: float = 0.5,
     bb_sigma_max_scale: float = 2.0,
+    sc_sigma_mode: str = "fixed",
+    class_sigma_scales: tuple = (0.5, 1.0, 2.0),
 ):
     N = len(data_list)
     trajectory = []
@@ -260,6 +297,11 @@ def sampling(
                     residue_rmsd_pred = outputs.get("residue_rmsd_pred", None)
                     if residue_rmsd_pred is not None:
                         residue_rmsd_pred = residue_rmsd_pred.float()
+                    residue_rmsd_class_logits = outputs.get(
+                        "residue_rmsd_class_logits", None
+                    )
+                    if residue_rmsd_class_logits is not None:
+                        residue_rmsd_class_logits = residue_rmsd_class_logits.float()
 
                 else:
                     outputs = model(inputs, fast_updates=True)
@@ -271,6 +313,21 @@ def sampling(
                     bb_rot_drift = outputs["bb_rot_pred"]
                     sidechain_tor_score = outputs["sc_tor_pred"]
                     residue_rmsd_pred = outputs.get("residue_rmsd_pred", None)
+                    residue_rmsd_class_logits = outputs.get(
+                        "residue_rmsd_class_logits", None
+                    )
+
+                outputs = _inject_external_residue_rmsd(
+                    outputs, inputs, class_sigma_scales
+                )
+                residue_rmsd_pred = outputs.get("residue_rmsd_pred", None)
+                if residue_rmsd_pred is not None:
+                    residue_rmsd_pred = residue_rmsd_pred.float()
+                residue_rmsd_class_logits = outputs.get(
+                    "residue_rmsd_class_logits", None
+                )
+                if residue_rmsd_class_logits is not None:
+                    residue_rmsd_class_logits = residue_rmsd_class_logits.float()
 
             tr_g = tr_sigma * torch.sqrt(
                 torch.tensor(
@@ -437,6 +494,37 @@ def sampling(
                         else 1 - sc_tor_schedule[t_idx]
                     )
 
+                    sidechain_tor_sigma_eff = sidechain_tor_sigma
+                    if (
+                        sc_sigma_mode == "class"
+                        and residue_rmsd_class_logits is not None
+                    ):
+                        pred_classes = residue_rmsd_class_logits.argmax(dim=-1)
+                        scales = torch.tensor(
+                            class_sigma_scales,
+                            dtype=pred_classes.dtype,
+                            device=pred_classes.device,
+                        )
+                        pred_classes = torch.clamp(
+                            pred_classes, min=0, max=len(scales) - 1
+                        )
+                        residue_scales = scales[pred_classes].float()
+
+                        atom_rec_index = complex_graph_batch[
+                            "atom", "receptor"
+                        ].edge_index[1]
+                        edge_index = complex_graph_batch[
+                            "atom", "atom_bond", "atom"
+                        ].edge_index
+                        edge_mask = complex_graph_batch[
+                            "atom", "atom_bond", "atom"
+                        ].edge_mask
+                        rot_edges = edge_index[:, edge_mask]
+                        src_res = atom_rec_index[rot_edges[0].long()]
+                        sidechain_tor_sigma_eff = (
+                            sidechain_tor_sigma * residue_scales[src_res]
+                        )
+
                     if ode:
                         sidechain_tor_perturb = dt_sidechain_tor * sidechain_tor_score
                     else:
@@ -456,7 +544,7 @@ def sampling(
                         sidechain_tor_perturb = (
                             dt_sidechain_tor * sidechain_tor_score
                             + np.sqrt(dt_sidechain_tor)
-                            * sidechain_tor_sigma
+                            * sidechain_tor_sigma_eff
                             * sidechain_tor_z
                         )
 
@@ -517,7 +605,20 @@ def sampling(
 
                     bb_tr_sigma_eff = bb_tr_sigma
                     bb_rot_sigma_eff = bb_rot_sigma
-                    if (
+                    if bb_sigma_mode == "class" and residue_rmsd_class_logits is not None:
+                        pred_classes = residue_rmsd_class_logits.argmax(dim=-1)
+                        scales = torch.tensor(
+                            class_sigma_scales,
+                            dtype=pred_classes.dtype,
+                            device=pred_classes.device,
+                        )
+                        pred_classes = torch.clamp(
+                            pred_classes, min=0, max=len(scales) - 1
+                        )
+                        scale = scales[pred_classes].float()
+                        bb_tr_sigma_eff = bb_tr_sigma * scale
+                        bb_rot_sigma_eff = bb_rot_sigma * scale
+                    elif (
                         bb_sigma_mode == "predicted"
                         and residue_rmsd_pred is not None
                         and hasattr(complex_graph_batch["receptor"], "nearby_residues")
@@ -540,6 +641,17 @@ def sampling(
                             )
                             bb_tr_sigma_eff = bb_tr_sigma * scale
                             bb_rot_sigma_eff = bb_rot_sigma * scale
+
+                    if (
+                        isinstance(bb_tr_sigma_eff, torch.Tensor)
+                        and bb_tr_sigma_eff.dim() == 1
+                    ):
+                        bb_tr_sigma_eff = bb_tr_sigma_eff.unsqueeze(-1)
+                    if (
+                        isinstance(bb_rot_sigma_eff, torch.Tensor)
+                        and bb_rot_sigma_eff.dim() == 1
+                    ):
+                        bb_rot_sigma_eff = bb_rot_sigma_eff.unsqueeze(-1)
 
                     bb_tr_perturb = (
                         bb_tr_drift * dt_bb_tr
