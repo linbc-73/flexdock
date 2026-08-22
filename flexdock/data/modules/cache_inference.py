@@ -58,22 +58,30 @@ class CachePredictionDataset(Dataset):
 
         complex_graph.name = name
 
-        if self.transform is not None:
-            try:
-                complex_graph = self.transform(complex_graph)
-            except Exception as e:
-                print(f"Failed to apply transform for {name}: {e}")
-                complex_graph = ComplexData()
-                complex_graph["name"] = name
-                complex_graph["success"] = False
-                return complex_graph
-
         # InferenceDataModule expects these attributes to exist.
         if not hasattr(complex_graph, "amber_subset_mask"):
             complex_graph.amber_subset_mask = ""
 
-        complex_graph["success"] = True
         return complex_graph
+
+    def __getitem__(self, idx):
+        data = self.get(self.indices()[idx])
+        if hasattr(data, "success") and not data.success:
+            return data
+        if self.transform is None:
+            data["success"] = True
+            return data
+        try:
+            data = self.transform(data)
+        except Exception as e:
+            name = data["name"] if "name" in data else self.complex_names[idx]
+            print(f"Failed to apply transform for {name}: {e}")
+            data = ComplexData()
+            data["name"] = name
+            data["success"] = False
+            return data
+        data["success"] = True
+        return data
 
     def len(self):
         return len(self.complex_names)
