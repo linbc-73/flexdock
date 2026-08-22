@@ -14,6 +14,8 @@ from torch_geometric.data import Dataset
 from torch_geometric.loader import DataLoader
 from lightning.pytorch import LightningDataModule
 
+from flexdock.data.modules import ComplexData
+
 
 class CachePredictionDataset(Dataset):
     def __init__(
@@ -39,22 +41,38 @@ class CachePredictionDataset(Dataset):
     def get(self, idx):
         name = self.complex_names[idx]
         graph_path = os.path.join(self.cache_path, f"heterograph-{name}.pt")
-        complex_graph = torch.load(graph_path, weights_only=False)
+
+        try:
+            complex_graph = torch.load(graph_path, weights_only=False)
+        except Exception as e:
+            print(f"Failed to load cache for {name}: {e}")
+            complex_graph = ComplexData()
+            complex_graph["name"] = name
+            complex_graph["success"] = False
+            return complex_graph
 
         if hasattr(complex_graph, "mol"):
             delattr(complex_graph, "mol")
         if "mol" in complex_graph:
             del complex_graph["mol"]
 
-        complex_graph.name = [name]
+        complex_graph.name = name
 
         if self.transform is not None:
-            complex_graph = self.transform(complex_graph)
+            try:
+                complex_graph = self.transform(complex_graph)
+            except Exception as e:
+                print(f"Failed to apply transform for {name}: {e}")
+                complex_graph = ComplexData()
+                complex_graph["name"] = name
+                complex_graph["success"] = False
+                return complex_graph
 
         # InferenceDataModule expects these attributes to exist.
         if not hasattr(complex_graph, "amber_subset_mask"):
             complex_graph.amber_subset_mask = ""
 
+        complex_graph["success"] = True
         return complex_graph
 
     def len(self):

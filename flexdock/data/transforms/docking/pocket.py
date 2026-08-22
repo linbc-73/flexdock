@@ -37,6 +37,10 @@ class PocketTransform(BaseTransform):
         if not self.pocket_reduction:
             center = torch.mean(data["receptor"].pos, dim=0)
             data = self.center_complex(data, pocket_center=center)
+            if not hasattr(data["atom"], "atom_mask"):
+                data["atom"].atom_mask = torch.ones(
+                    data["atom"].x.shape[0], dtype=torch.bool
+                )
             return data
         pocket_info = self.compute_pocket(data)
         pocket_selection_fn = (
@@ -79,6 +83,15 @@ class PocketTransform(BaseTransform):
         data.pocket_mask = amber_pocket_mask
 
         data["receptor"].nearby_residues = nearby_residues[res_pocket_mask]
+
+        # Cache the full-structure masks needed by the inference writer/evaluator.
+        # atom_mask covers pocket + buffer atoms; nearby_atoms covers pocket-only atoms.
+        data["atom"].atom_mask = atom_pocket_mask
+        if not hasattr(data["atom"], "nearby_atoms"):
+            atom_rec_index = data["atom", "atom_rec_contact", "receptor"].edge_index[1]
+            data["atom"].nearby_atoms = torch.index_select(
+                nearby_residues, dim=-1, index=atom_rec_index
+            )
 
         # Update atom numbering
         atom_numbering_old = torch.arange(data["atom"].pos.size(0))

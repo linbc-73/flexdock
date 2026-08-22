@@ -438,7 +438,7 @@ def predict():
             pocket_buffer=args.pocket_buffer,
             pocket_min_size=args.pocket_min_size,
             only_nearby_residues_atomic=args.only_nearby_residues_atomic,
-            batch_size=args.batch_size,
+            batch_size=1,
         )
     else:
         datamodule = InferenceDataModule(
